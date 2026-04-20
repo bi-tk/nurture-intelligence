@@ -53,7 +53,7 @@ async function validatePardot(settings: Record<string, string>) {
 
   // Probe the Pardot API using the Salesforce access token
   try {
-    const pardotRes = await fetch('https://pi.pardot.com/api/v5/objects/emails?limit=1', {
+    const pardotRes = await fetch('https://pi.pardot.com/api/v5/objects/emails?fields=id&limit=1', {
       headers: {
         Authorization: `Bearer ${sfAccessToken}`,
         'Pardot-Business-Unit-Id': businessUnitId,
