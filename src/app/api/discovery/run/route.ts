@@ -450,7 +450,7 @@ export async function POST() {
       data: {
         status: 'complete',
         completedAt: new Date(),
-        rawAudit: findings as unknown as Prisma.InputJsonValue,
+        rawAudit: JSON.parse(JSON.stringify(findings)),
       },
     })
 
