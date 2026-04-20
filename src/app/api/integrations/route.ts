@@ -35,61 +35,27 @@ async function validateSalesforce(creds: Record<string, string>): Promise<{ erro
 }
 
 async function validatePardot(settings: Record<string, string>) {
-  const { businessUnitId, clientId, clientSecret } = settings
+  const { businessUnitId } = settings
 
-  if (!businessUnitId || !clientId || !clientSecret) {
-    return { error: 'Missing required fields' }
+  if (!businessUnitId) {
+    return { error: 'Missing Business Unit ID' }
   }
 
-  const tokenBody = new URLSearchParams({
-    grant_type: 'client_credentials',
-    client_id: clientId,
-    client_secret: clientSecret,
-  })
+  // Reuse the Salesforce access token already stored from the Salesforce integration.
+  // Pardot lives in the same org — no separate OAuth needed.
+  const sfIntegration = await prisma.integration.findUnique({ where: { platform: 'salesforce' } })
+  const storedSettings = sfIntegration?.settings as Record<string, string> | null
+  const sfAccessToken = storedSettings?.accessToken
 
-  // Try production then sandbox — sandbox orgs use test.salesforce.com
-  const loginUrls = [
-    'https://login.salesforce.com/services/oauth2/token',
-    'https://test.salesforce.com/services/oauth2/token',
-  ]
-
-  let accessToken: string | null = null
-  let lastError = ''
-
-  for (const loginUrl of loginUrls) {
-    try {
-      const tokenRes = await fetch(loginUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: tokenBody.toString(),
-      })
-      const tokenData = await tokenRes.json() as {
-        access_token?: string
-        error?: string
-        error_description?: string
-      }
-
-      if (tokenData.access_token) {
-        accessToken = tokenData.access_token
-        break
-      }
-      lastError = tokenData.error_description ?? tokenData.error ?? tokenRes.statusText
-    } catch {
-      lastError = 'Network error reaching Salesforce login.'
-    }
+  if (!sfAccessToken) {
+    return { error: 'Connect Salesforce first — Pardot uses the same Salesforce session.' }
   }
 
-  if (!accessToken) {
-    return {
-      error: `Salesforce OAuth failed: ${lastError}. To fix: in Salesforce Setup → Connected Apps → [your app] → OAuth Policies, set IP Relaxation to "Relax IP restrictions" and enable "Client Credentials Flow".`,
-    }
-  }
-
-  // Step 2: Probe Pardot API with the business unit ID
+  // Probe the Pardot API using the Salesforce access token
   try {
     const pardotRes = await fetch('https://pi.pardot.com/api/v5/objects/emails?limit=1', {
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${sfAccessToken}`,
         'Pardot-Business-Unit-Id': businessUnitId,
       },
     })
@@ -99,10 +65,10 @@ async function validatePardot(settings: Record<string, string>) {
       return { error: `Pardot API error (${pardotRes.status}): ${errText}. Verify your Business Unit ID is correct.` }
     }
   } catch {
-    return { error: 'Could not reach pi.pardot.com. OAuth token was valid but Pardot was unreachable.' }
+    return { error: 'Could not reach pi.pardot.com. Check your network and try again.' }
   }
 
-  return { error: null, accessToken }
+  return { error: null, accessToken: sfAccessToken }
 }
 
 // ---------------------------------------------------------------------------

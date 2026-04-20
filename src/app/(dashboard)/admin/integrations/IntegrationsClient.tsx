@@ -33,10 +33,9 @@ const PLATFORMS = [
     color: '#2952FF',
     icon: 'M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
     fields: [
-      { key: 'businessUnitId', label: 'Business Unit ID', placeholder: '0Uv...',            type: 'text'     },
-      { key: 'clientId',       label: 'Client ID',        placeholder: 'Connected App ID',  type: 'text'     },
-      { key: 'clientSecret',   label: 'Client Secret',    placeholder: 'Connected App Secret', type: 'password' },
+      { key: 'businessUnitId', label: 'Business Unit ID', placeholder: '0Uve...', type: 'text' },
     ],
+    note: 'Uses your connected Salesforce session — connect Salesforce first.',
   },
 ]
 
@@ -211,7 +210,11 @@ export default function IntegrationsClient({ integrations }: { integrations: Int
               </div>
               <div>
                 <p className="text-white font-semibold">Connect {modalPlatform.name}</p>
-                <p className="text-white/40 text-xs">Enter your Connected App credentials</p>
+                <p className="text-white/40 text-xs">
+                  {'note' in modalPlatform && modalPlatform.note
+                    ? modalPlatform.note
+                    : 'Enter your Connected App credentials'}
+                </p>
               </div>
             </div>
 
