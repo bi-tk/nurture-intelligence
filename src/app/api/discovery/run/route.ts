@@ -397,6 +397,18 @@ export async function POST() {
       return NextResponse.json({ error: 'Pardot Business Unit ID not found. Please reconnect Pardot.' }, { status: 400 })
     }
 
+    // Validate the stored token is still alive before running the full audit
+    const tokenCheck = await fetch(
+      `${instanceUrl}/services/data/${SF_API_VERSION}/sobjects/Lead/describe`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    )
+    if (!tokenCheck.ok) {
+      return NextResponse.json(
+        { error: 'Salesforce session has expired. Please go to Integrations, disconnect Salesforce, and reconnect.' },
+        { status: 401 }
+      )
+    }
+
     // Create report
     const report = await prisma.discoveryReport.create({ data: { status: 'running' } })
 
