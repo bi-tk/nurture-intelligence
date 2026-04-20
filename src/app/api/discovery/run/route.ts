@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { Connection } from 'jsforce'
+
+const SF_API_VERSION = 'v59.0'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -17,7 +18,7 @@ interface ObjectDescribeResult {
 
 interface Creds {
   instanceUrl?: string
-  accessToken?: string  // stored after successful jsforce login
+  accessToken?: string
   businessUnitId?: string
 }
 
@@ -30,20 +31,30 @@ interface Finding {
   confidenceScore: number
 }
 
-// ─── Salesforce discovery helpers ────────────────────────────────────────────
+// ─── Salesforce REST describe — no jsforce, no OAuth refresh ──────────────────
+
+async function describeSfObject(
+  instanceUrl: string,
+  accessToken: string,
+  objectName: string
+): Promise<ObjectDescribeResult | null> {
+  try {
+    const res = await fetch(
+      `${instanceUrl}/services/data/${SF_API_VERSION}/sobjects/${objectName}/describe`,
+      { headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' } }
+    )
+    if (!res.ok) return null
+    return await res.json() as ObjectDescribeResult
+  } catch {
+    return null
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function matchesKeywords(s: string, keywords: string[]): boolean {
   const lower = s.toLowerCase()
   return keywords.some((k) => lower.includes(k))
-}
-
-async function describeSfObject(conn: Connection, objectName: string): Promise<ObjectDescribeResult | null> {
-  try {
-    const result = await conn.describe(objectName)
-    return result as unknown as ObjectDescribeResult
-  } catch {
-    return null
-  }
 }
 
 function findFields(desc: ObjectDescribeResult | null, keywords: string[]): FieldDescribe[] {
@@ -59,21 +70,20 @@ function picklistContains(field: FieldDescribe, keywords: string[]): string[] {
     .map((v) => v.label)
 }
 
-// ─── Concept-specific detectors ──────────────────────────────────────────────
+// ─── Concept detectors ────────────────────────────────────────────────────────
 
-async function detectMQL(conn: Connection, findings: Finding[]) {
-  const leadDesc = await describeSfObject(conn, 'Lead')
-  const contactDesc = await describeSfObject(conn, 'Contact')
+async function detectMQL(instanceUrl: string, accessToken: string, findings: Finding[]) {
+  const [leadDesc, contactDesc] = await Promise.all([
+    describeSfObject(instanceUrl, accessToken, 'Lead'),
+    describeSfObject(instanceUrl, accessToken, 'Contact'),
+  ])
 
-  const mqlKeywords = ['mql', 'marketing_qualified', 'marketing qualified', 'mql_date', 'mqldate', 'isreplicated']
+  const mqlKeywords = ['mql', 'marketing_qualified', 'marketing qualified', 'mql_date', 'mqldate']
   const statusKeywords = ['mql', 'marketing qualified', 'qualified lead']
 
-  // Check Lead fields
   const leadFields = findFields(leadDesc, mqlKeywords)
   const leadStatusField = leadDesc?.fields.find((f) => f.name === 'Status')
   const mqlStatuses = leadStatusField ? picklistContains(leadStatusField, statusKeywords) : []
-
-  // Check Contact fields
   const contactFields = findFields(contactDesc, mqlKeywords)
 
   let detectedLogic = ''
@@ -97,7 +107,6 @@ async function detectMQL(conn: Connection, findings: Finding[]) {
     detectedLogic += `Contact fields detected: ${contactFields.map((f) => `${f.name} (${f.label})`).join(', ')}. `
     confidence += 0.2
   }
-
   if (!detectedLogic) {
     detectedLogic = 'No dedicated MQL fields found on Lead or Contact. MQL may be tracked via Lead.Status picklist values or a custom object. Manual review recommended.'
     confidence = 0.15
@@ -113,10 +122,12 @@ async function detectMQL(conn: Connection, findings: Finding[]) {
   })
 }
 
-async function detectSQL(conn: Connection, findings: Finding[]) {
-  const leadDesc = await describeSfObject(conn, 'Lead')
-  const contactDesc = await describeSfObject(conn, 'Contact')
-  const oppDesc = await describeSfObject(conn, 'Opportunity')
+async function detectSQL(instanceUrl: string, accessToken: string, findings: Finding[]) {
+  const [leadDesc, contactDesc, oppDesc] = await Promise.all([
+    describeSfObject(instanceUrl, accessToken, 'Lead'),
+    describeSfObject(instanceUrl, accessToken, 'Contact'),
+    describeSfObject(instanceUrl, accessToken, 'Opportunity'),
+  ])
 
   const sqlKeywords = ['sql', 'sales_qualified', 'sales qualified', 'sqo', 'accepted']
   const stageKeywords = ['sql', 'sales qualified', 'sqo', 'qualified', 'discovery']
@@ -134,13 +145,13 @@ async function detectSQL(conn: Connection, findings: Finding[]) {
   if (leadFields.length > 0) {
     objectsFound.push('Lead')
     fieldApiNames.push(...leadFields.map((f) => f.name))
-    detectedLogic += `Lead SQL fields: ${leadFields.map((f) => `${f.name}`).join(', ')}. `
+    detectedLogic += `Lead SQL fields: ${leadFields.map((f) => f.name).join(', ')}. `
     confidence += 0.3
   }
   if (contactFields.length > 0) {
     objectsFound.push('Contact')
     fieldApiNames.push(...contactFields.map((f) => f.name))
-    detectedLogic += `Contact SQL fields: ${contactFields.map((f) => `${f.name}`).join(', ')}. `
+    detectedLogic += `Contact SQL fields: ${contactFields.map((f) => f.name).join(', ')}. `
     confidence += 0.2
   }
   if (sqlStages.length > 0) {
@@ -148,7 +159,6 @@ async function detectSQL(conn: Connection, findings: Finding[]) {
     detectedLogic += `Opportunity.StageName includes SQL-related stages: "${sqlStages.join('", "')}". `
     confidence += 0.25
   }
-
   if (!detectedLogic) {
     detectedLogic = 'No dedicated SQL fields found. SQL qualification may be tracked via Opportunity stage transitions. Review Opportunity.StageName picklist and any Lead conversion workflows.'
     confidence = 0.15
@@ -164,9 +174,11 @@ async function detectSQL(conn: Connection, findings: Finding[]) {
   })
 }
 
-async function detectDiscoveryCall(conn: Connection, findings: Finding[]) {
-  const taskDesc = await describeSfObject(conn, 'Task')
-  const eventDesc = await describeSfObject(conn, 'Event')
+async function detectDiscoveryCall(instanceUrl: string, accessToken: string, findings: Finding[]) {
+  const [taskDesc, eventDesc] = await Promise.all([
+    describeSfObject(instanceUrl, accessToken, 'Task'),
+    describeSfObject(instanceUrl, accessToken, 'Event'),
+  ])
 
   const callKeywords = ['discovery', 'disco', 'qualifying', 'qualification', 'intro call']
   const typeKeywords = ['type', 'calltype', 'call_type', 'subject']
@@ -174,7 +186,6 @@ async function detectDiscoveryCall(conn: Connection, findings: Finding[]) {
   const taskTypeField = taskDesc?.fields.find((f) => f.name === 'Type' || f.name === 'CallType')
   const taskSubjectField = taskDesc?.fields.find((f) => f.name === 'Subject')
   const discoveryTypes = taskTypeField ? picklistContains(taskTypeField, callKeywords) : []
-
   const taskCallFields = findFields(taskDesc, callKeywords.concat(typeKeywords))
   const eventFields = findFields(eventDesc, callKeywords)
 
@@ -193,7 +204,7 @@ async function detectDiscoveryCall(conn: Connection, findings: Finding[]) {
     confidence += 0.2
   }
   if (taskSubjectField) {
-    detectedLogic += 'Task.Subject field available — discovery calls may be tracked via subject text matching (e.g. Subject LIKE \'%Discovery%\'). '
+    detectedLogic += "Task.Subject field available — discovery calls may be tracked via subject text matching (e.g. Subject LIKE '%Discovery%'). "
     confidence += 0.1
   }
   if (eventFields.length > 0) {
@@ -201,9 +212,8 @@ async function detectDiscoveryCall(conn: Connection, findings: Finding[]) {
     detectedLogic += `Event fields detected: ${eventFields.map((f) => f.name).join(', ')}. `
     confidence += 0.1
   }
-
   if (!detectedLogic) {
-    detectedLogic = 'No explicit discovery call field found. Recommend tracking via Task.Subject LIKE \'%Discovery%\' or Task.Type = \'Discovery Call\'. A custom Task Type picklist value is the most reliable approach.'
+    detectedLogic = "No explicit discovery call field found. Recommend tracking via Task.Subject LIKE '%Discovery%' or Task.Type = 'Discovery Call'. A custom Task Type picklist value is the most reliable approach."
     confidence = 0.1
   }
 
@@ -219,7 +229,6 @@ async function detectDiscoveryCall(conn: Connection, findings: Finding[]) {
 
 async function detectEngagedContactPardot(
   accessToken: string,
-  instanceUrl: string,
   businessUnitId: string,
   findings: Finding[]
 ) {
@@ -228,44 +237,30 @@ async function detectEngagedContactPardot(
   const foundRules: string[] = []
 
   try {
-    // Check Pardot lists
     const listsRes = await fetch('https://pi.pardot.com/api/v5/objects/lists?fields=id,name&limit=200', {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Pardot-Business-Unit-Id': businessUnitId,
-      },
+      headers: { Authorization: `Bearer ${accessToken}`, 'Pardot-Business-Unit-Id': businessUnitId },
     })
     if (listsRes.ok) {
-      const listsData = await listsRes.json() as { values?: Array<{ id: number; name: string }> }
-      const lists = listsData.values ?? []
-      for (const list of lists) {
-        if (matchesKeywords(list.name, engagementKeywords)) {
-          foundLists.push(list.name)
-        }
+      const data = await listsRes.json() as { values?: Array<{ id: number; name: string }> }
+      for (const list of data.values ?? []) {
+        if (matchesKeywords(list.name, engagementKeywords)) foundLists.push(list.name)
       }
     }
   } catch { /* ignore */ }
 
   try {
-    // Check automation rules
     const rulesRes = await fetch('https://pi.pardot.com/api/v5/objects/automationRules?fields=id,name&limit=100', {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Pardot-Business-Unit-Id': businessUnitId,
-      },
+      headers: { Authorization: `Bearer ${accessToken}`, 'Pardot-Business-Unit-Id': businessUnitId },
     })
     if (rulesRes.ok) {
-      const rulesData = await rulesRes.json() as { values?: Array<{ id: number; name: string }> }
-      const rules = rulesData.values ?? []
-      for (const rule of rules) {
+      const data = await rulesRes.json() as { values?: Array<{ id: number; name: string }> }
+      for (const rule of data.values ?? []) {
         if (matchesKeywords(rule.name, engagementKeywords.concat(['score', 'activity']))) {
           foundRules.push(rule.name)
         }
       }
     }
   } catch { /* ignore */ }
-
-  void instanceUrl // suppress unused
 
   let detectedLogic = ''
   let confidence = 0.25
@@ -293,18 +288,19 @@ async function detectEngagedContactPardot(
   })
 }
 
-async function detectAttribution(conn: Connection, findings: Finding[]) {
-  const campMemberDesc = await describeSfObject(conn, 'CampaignMember')
-  const campaignDesc = await describeSfObject(conn, 'Campaign')
-  const oppDesc = await describeSfObject(conn, 'Opportunity')
+async function detectAttribution(instanceUrl: string, accessToken: string, findings: Finding[]) {
+  const [campDesc, campMemberDesc, oppDesc] = await Promise.all([
+    describeSfObject(instanceUrl, accessToken, 'Campaign'),
+    describeSfObject(instanceUrl, accessToken, 'CampaignMember'),
+    describeSfObject(instanceUrl, accessToken, 'Opportunity'),
+  ])
 
   const attrKeywords = ['attribution', 'nurture', 'first_touch', 'last_touch', 'multi_touch', 'campaign_source', 'influenced']
   const nurtureKeywords = ['nurture', 'drip', 'sequence', 'engagement', 'email_program']
 
-  const campFields = findFields(campaignDesc, attrKeywords.concat(nurtureKeywords))
-  const campTypeField = campaignDesc?.fields.find((f) => f.name === 'Type')
+  const campFields = findFields(campDesc, attrKeywords.concat(nurtureKeywords))
+  const campTypeField = campDesc?.fields.find((f) => f.name === 'Type')
   const nurtureTypes = campTypeField ? picklistContains(campTypeField, nurtureKeywords) : []
-
   const campMemberFields = findFields(campMemberDesc, attrKeywords)
   const oppFields = findFields(oppDesc, attrKeywords)
 
@@ -346,7 +342,6 @@ async function detectAttribution(conn: Connection, findings: Finding[]) {
 
 export async function POST() {
   try {
-    // Load integration credentials
     const [sfIntegration, pardotIntegration] = await Promise.all([
       prisma.integration.findUnique({ where: { platform: 'salesforce' } }),
       prisma.integration.findUnique({ where: { platform: 'pardot' } }),
@@ -362,44 +357,41 @@ export async function POST() {
     const sfCreds = sfIntegration.settings as Creds
     const pardotCreds = pardotIntegration.settings as Creds
 
-    // Use the stored access token from the validated Salesforce connection
     const accessToken = sfCreds.accessToken
     const instanceUrl = sfCreds.instanceUrl
 
     if (!accessToken || !instanceUrl) {
-      return NextResponse.json({ error: 'Salesforce access token not found. Please reconnect Salesforce.' }, { status: 400 })
+      return NextResponse.json(
+        { error: 'Salesforce access token not found. Please disconnect and reconnect Salesforce.' },
+        { status: 400 }
+      )
     }
 
-    // Create DiscoveryReport record
-    const report = await prisma.discoveryReport.create({
-      data: { status: 'running' },
-    })
+    const businessUnitId = pardotCreds.businessUnitId
+    if (!businessUnitId) {
+      return NextResponse.json({ error: 'Pardot Business Unit ID not found. Please reconnect Pardot.' }, { status: 400 })
+    }
 
-    const conn = new Connection({ instanceUrl, accessToken })
+    // Create report
+    const report = await prisma.discoveryReport.create({ data: { status: 'running' } })
 
-    // Run all detectors in parallel
+    // Run all detectors in parallel using direct REST calls (no jsforce Connection)
     const findings: Finding[] = []
 
     await Promise.all([
-      detectMQL(conn, findings),
-      detectSQL(conn, findings),
-      detectDiscoveryCall(conn, findings),
-      detectEngagedContactPardot(
-        accessToken,
-        instanceUrl,
-        pardotCreds.businessUnitId!,
-        findings
-      ),
-      detectAttribution(conn, findings),
+      detectMQL(instanceUrl, accessToken, findings),
+      detectSQL(instanceUrl, accessToken, findings),
+      detectDiscoveryCall(instanceUrl, accessToken, findings),
+      detectEngagedContactPardot(accessToken, businessUnitId, findings),
+      detectAttribution(instanceUrl, accessToken, findings),
     ])
 
-    // Upsert FieldMapping records — find existing by concept+platform, then update or create
+    // Upsert FieldMapping records
     await Promise.all(
       findings.map(async (f) => {
         const existing = await prisma.fieldMapping.findFirst({
           where: { concept: f.concept, platform: f.platform },
         })
-
         if (existing) {
           return prisma.fieldMapping.update({
             where: { id: existing.id },
@@ -408,26 +400,25 @@ export async function POST() {
               fieldApiName: f.fieldApiName,
               detectedLogic: f.detectedLogic,
               confidenceScore: f.confidenceScore,
-              status: 'pending', // reset to pending on re-run
-            },
-          })
-        } else {
-          return prisma.fieldMapping.create({
-            data: {
-              concept: f.concept,
-              platform: f.platform,
-              object: f.object,
-              fieldApiName: f.fieldApiName,
-              detectedLogic: f.detectedLogic,
-              confidenceScore: f.confidenceScore,
               status: 'pending',
             },
           })
         }
+        return prisma.fieldMapping.create({
+          data: {
+            concept: f.concept,
+            platform: f.platform,
+            object: f.object,
+            fieldApiName: f.fieldApiName,
+            detectedLogic: f.detectedLogic,
+            confidenceScore: f.confidenceScore,
+            status: 'pending',
+          },
+        })
       })
     )
 
-    // Update report as complete
+    // Mark report complete
     await prisma.discoveryReport.update({
       where: { id: report.id },
       data: {
@@ -437,11 +428,7 @@ export async function POST() {
       },
     })
 
-    // Return all current field mappings
-    const mappings = await prisma.fieldMapping.findMany({
-      orderBy: { createdAt: 'desc' },
-    })
-
+    const mappings = await prisma.fieldMapping.findMany({ orderBy: { createdAt: 'desc' } })
     return NextResponse.json({ success: true, findings: mappings })
   } catch (err) {
     console.error('[POST /api/discovery/run]', err)
