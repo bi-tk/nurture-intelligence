@@ -1,21 +1,26 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatPercent, formatCurrency, formatNumber } from '@/lib/utils'
-import { getPardotCreds, getSfCreds, pardotGet, sfQuery, pct } from '@/lib/sf-api'
+import { getPardotCreds, getSfCreds, pardotGet, sfQuery } from '@/lib/sf-api'
 
-interface PardotList {
-  id?: number
-  name?: string
-  title?: string
-  memberCount?: number
-}
+const NURTURE_SEGMENT_KEYWORDS = [
+  'CIOs and Tech Leaders of Non-Tech',
+  'CEOs and Non-Tech Leaders of Non-Tech',
+  'Managing Partners in Private Equity',
+  'CTOs and Technology Leaders of Tech',
+  'CTOs and Tech Leaders of Funded Tech',
+  'CIOs and Tech Leaders of Non-Tech Businesses With Under',
+  'CEOs and Non-Tech Leaders of Tech Businesses',
+]
 
-interface CampaignRecord {
-  Type?: string
-  Name?: string
-  NumberOfLeads?: number
-  NumberOfOpportunities?: number
-  AmountAllOpportunities?: number
+interface PardotList { id?: number; name?: string; title?: string; description?: string }
+interface IndustryRecord { Normalized_Industry__c: string; expr0: number }
+
+type SegmentRow = {
+  name: string
+  sent: number; delivered: number; opens: number; clicks: number; bounces: number
+  deliveryRate: number; openRate: number; clickRate: number; ctr: number
+  unsubRate: number; mqlRate: number; sqlRate: number; wonRevenue: number
 }
 
 async function fetchSegmentData() {
@@ -23,54 +28,74 @@ async function fetchSegmentData() {
     const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
     if (!pardotCreds && !sfCreds) return null
 
-    // Pardot lists as segments
+    const makeRow = (name: string, delivered: number): SegmentRow => ({
+      name, delivered,
+      sent: 0, opens: 0, clicks: 0, bounces: 0,
+      deliveryRate: 0, openRate: 0, clickRate: 0, ctr: 0,
+      unsubRate: 0, mqlRate: 0, sqlRate: 0, wonRevenue: 0,
+    })
+
+    // Pardot lists — match 7 nurture segments
     const listData = pardotCreds
-      ? await pardotGet<{ values?: PardotList[] }>(pardotCreds, 'lists?fields=id,name,title,memberCount&limit=200')
+      ? await pardotGet<{ values?: PardotList[] }>(pardotCreds, 'lists?fields=id,name,title,description&limit=200')
       : null
 
-    const lists = (listData?.values ?? [])
-      .filter(l => (l.memberCount ?? 0) > 0)
-      .sort((a, b) => (b.memberCount ?? 0) - (a.memberCount ?? 0))
-      .slice(0, 20)
-      .map(l => ({
-        name: l.name ?? l.title ?? `List ${l.id}`,
-        memberCount: l.memberCount ?? 0,
-        openRate: 0,
-        clickRate: 0,
-        mqlRate: 0,
-      }))
+    const allLists = listData?.values ?? []
+    const nurtureLists = allLists.filter(l => {
+      const n = l.name ?? l.title ?? ''
+      return NURTURE_SEGMENT_KEYWORDS.some(kw => n.includes(kw.substring(0, 20)))
+    })
 
-    // SF Campaign type breakdown
-    const campResult = sfCreds
-      ? await sfQuery<CampaignRecord>(
-          sfCreds,
-          'SELECT Type, Name, NumberOfLeads, NumberOfOpportunities, AmountAllOpportunities FROM Campaign WHERE IsActive = true ORDER BY NumberOfLeads DESC LIMIT 50'
+    // Member counts via list-memberships
+    const memberCounts = pardotCreds && nurtureLists.length
+      ? await Promise.all(
+          nurtureLists.map(async l => {
+            const d = await pardotGet<{ values?: unknown[] }>(pardotCreds, `list-memberships?fields=id&listId=${l.id}&limit=1000`)
+            return { listId: l.id, count: (d?.values ?? []).length }
+          })
         )
+      : []
+
+    const countMap = Object.fromEntries(memberCounts.map(m => [m.listId, m.count]))
+
+    const segments: SegmentRow[] = nurtureLists.length
+      ? nurtureLists.map(l => makeRow(l.name ?? l.title ?? `List ${l.id}`, countMap[l.id ?? 0] ?? 0)).sort((a, b) => b.delivered - a.delivered)
+      : allLists.slice(0, 10).map(l => makeRow(l.name ?? l.title ?? `List ${l.id}`, 0))
+
+    // SF industry breakdown from nurture leads
+    const industryResult = sfCreds
+      ? await sfQuery<IndustryRecord>(sfCreds, 'SELECT Normalized_Industry__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalized_Industry__c != null GROUP BY Normalized_Industry__c ORDER BY COUNT(Id) DESC LIMIT 20')
       : null
 
-    const campaigns = (campResult?.records ?? []).map(c => ({
-      name: c.Name ?? 'Unnamed',
-      type: c.Type ?? 'Other',
-      leads: c.NumberOfLeads ?? 0,
-      opportunities: c.NumberOfOpportunities ?? 0,
-      revenue: c.AmountAllOpportunities ?? 0,
-    }))
+    const industries: SegmentRow[] = (industryResult?.records ?? []).map(r =>
+      makeRow(r.Normalized_Industry__c, r.expr0)
+    )
 
-    // Aggregate by type for industry view
-    const byType: Record<string, { leads: number; revenue: number; count: number }> = {}
-    for (const c of campaigns) {
-      if (!byType[c.type]) byType[c.type] = { leads: 0, revenue: 0, count: 0 }
-      byType[c.type].leads += c.leads
-      byType[c.type].revenue += c.revenue
-      byType[c.type].count++
-    }
-    const industries = Object.entries(byType)
-      .map(([name, v]) => ({ name, mqls: v.leads, revenue: v.revenue }))
-      .sort((a, b) => b.mqls - a.mqls)
-      .slice(0, 10)
-
-    return { segments: lists, industries, sfConnected: !!sfCreds, pardotConnected: !!pardotCreds }
+    return { segments, industries, sfConnected: !!sfCreds, pardotConnected: !!pardotCreds }
   } catch { return null }
+}
+
+const PERF_COLS = ['Sent', 'Delivered', 'Opens', 'Clicks', 'Bounces', 'Delivery %', 'Open %', 'Click %', 'CTR', 'Unsub %', 'MQL %', 'SQL %', 'Won Revenue']
+
+function PerfRow({ row }: { row: SegmentRow }) {
+  return (
+    <tr className="hover:bg-white/2 transition-colors">
+      <td className="px-4 py-3 text-white whitespace-nowrap max-w-[240px]"><p className="truncate">{row.name}</p></td>
+      <td className="px-4 py-3 text-white/60 font-mono">{row.sent > 0 ? formatNumber(row.sent) : '—'}</td>
+      <td className="px-4 py-3 text-white/70 font-mono">{row.delivered > 0 ? formatNumber(row.delivered) : '—'}</td>
+      <td className="px-4 py-3 text-white/60 font-mono">{row.opens > 0 ? formatNumber(row.opens) : '—'}</td>
+      <td className="px-4 py-3 text-white/60 font-mono">{row.clicks > 0 ? formatNumber(row.clicks) : '—'}</td>
+      <td className="px-4 py-3 text-white/60 font-mono">{row.bounces > 0 ? formatNumber(row.bounces) : '—'}</td>
+      <td className="px-4 py-3 text-white/50 font-mono">{row.deliveryRate > 0 ? formatPercent(row.deliveryRate) : '—'}</td>
+      <td className="px-4 py-3 text-white/50 font-mono">{row.openRate > 0 ? formatPercent(row.openRate) : '—'}</td>
+      <td className="px-4 py-3 text-white/50 font-mono">{row.clickRate > 0 ? formatPercent(row.clickRate) : '—'}</td>
+      <td className="px-4 py-3 text-white/50 font-mono">{row.ctr > 0 ? formatPercent(row.ctr) : '—'}</td>
+      <td className="px-4 py-3 text-white/50 font-mono">{row.unsubRate > 0 ? formatPercent(row.unsubRate) : '—'}</td>
+      <td className="px-4 py-3 text-pulse-blue font-mono">{row.mqlRate > 0 ? formatPercent(row.mqlRate) : '—'}</td>
+      <td className="px-4 py-3 text-white/50 font-mono">{row.sqlRate > 0 ? formatPercent(row.sqlRate) : '—'}</td>
+      <td className="px-4 py-3 text-accent-green font-mono whitespace-nowrap">{row.wonRevenue > 0 ? formatCurrency(row.wonRevenue) : '—'}</td>
+    </tr>
+  )
 }
 
 export default async function SegmentsPage() {
@@ -98,89 +123,58 @@ export default async function SegmentsPage() {
           </div>
         )}
 
-        {/* Segment Performance */}
+        {/* Nurture Segment Performance */}
         <div className="bg-graphite-800 border border-white/5 rounded-xl overflow-hidden">
           <div className="px-5 py-4 border-b border-white/5">
-            <p className="text-white font-medium">
-              {isLive && live?.pardotConnected ? 'Pardot Lists' : 'Segment Performance'}
-            </p>
+            <p className="text-white font-medium">Nurture Segment Performance</p>
+            <p className="text-white/30 text-xs mt-0.5">Delivered = list members · Email performance populated when per-segment sends are available</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/5">
-                  {['List Name', 'Members', 'Open Rate', 'Click Rate', 'MQL Rate', 'Action'].map(h => (
-                    <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">{h}</th>
+                  <th className="text-left px-4 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">Segment</th>
+                  {PERF_COLS.map(h => (
+                    <th key={h} className="text-left px-4 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
                 {segments.length === 0 && (
-                  <tr><td colSpan={6} className="px-5 py-8 text-center text-white/30 text-sm">No data — connect Salesforce &amp; Pardot to see segment performance</td></tr>
+                  <tr><td colSpan={14} className="px-4 py-8 text-center text-white/30 text-sm">No nurture segments found — connect Pardot to see segment performance</td></tr>
                 )}
-                {segments.map((s) => (
-                  <tr key={s.name} className="hover:bg-white/2">
-                    <td className="px-5 py-3 text-white whitespace-nowrap max-w-[240px]"><p className="truncate">{s.name}</p></td>
-                    <td className="px-5 py-3 font-mono text-white/70">{'memberCount' in s ? formatNumber((s as { memberCount: number }).memberCount) : '—'}</td>
-                    <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.openRate ?? 0)}</td>
-                    <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.clickRate ?? 0)}</td>
-                    <td className="px-5 py-3 font-mono text-pulse-blue font-medium">{formatPercent(s.mqlRate ?? 0)}</td>
-                    <td className="px-5 py-3"><ActionBadge action="Optimize" /></td>
-                  </tr>
-                ))}
+                {segments.map(s => <PerfRow key={s.name} row={s} />)}
               </tbody>
             </table>
           </div>
         </div>
 
-        {/* Industry / Campaign Performance */}
+        {/* Industry Performance */}
         <div className="bg-graphite-800 border border-white/5 rounded-xl overflow-hidden">
           <div className="px-5 py-4 border-b border-white/5">
-            <p className="text-white font-medium">
-              {isLive && live?.sfConnected ? 'Campaign Performance by Type' : 'Industry Performance'}
-            </p>
+            <p className="text-white font-medium">Industry Performance</p>
+            <p className="text-white/30 text-xs mt-0.5">Delivered = nurture leads in that industry via Salesforce Normalized_Industry__c</p>
           </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/5">
-                {['Industry / Type', 'MQLs / Leads', 'Won Revenue'].map((h) => (
-                  <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {industries.length === 0 && (
-                <tr><td colSpan={3} className="px-5 py-8 text-center text-white/30 text-sm">No data — connect Salesforce to see industry performance</td></tr>
-              )}
-              {industries.map((ind) => (
-                <tr key={ind.name} className="hover:bg-white/2">
-                  <td className="px-5 py-3 text-white">{ind.name}</td>
-                  <td className="px-5 py-3 font-mono text-white/70">{formatNumber(ind.mqls)}</td>
-                  <td className="px-5 py-3 font-mono text-accent-green">{ind.revenue ? formatCurrency(ind.revenue) : '—'}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/5">
+                  <th className="text-left px-4 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">Industry</th>
+                  {PERF_COLS.map(h => (
+                    <th key={h} className="text-left px-4 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {industries.length === 0 && (
+                  <tr><td colSpan={14} className="px-4 py-8 text-center text-white/30 text-sm">No data — connect Salesforce to see industry performance</td></tr>
+                )}
+                {industries.map(s => <PerfRow key={s.name} row={s} />)}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
-  )
-}
-
-function ActionBadge({ action }: { action: string }) {
-  const styles: Record<string, { background: string; color: string }> = {
-    'Scale Up': { background: '#0f2a18', color: '#4ade80' },
-    Optimize: { background: '#2a1a0a', color: '#fb923c' },
-    Review: { background: '#0f1e38', color: '#38bdf8' },
-    Rewrite: { background: '#2a0f0f', color: '#f87171' },
-  }
-  const s = styles[action] ?? styles.Review
-  return (
-    <span
-      className="text-xs font-mono px-2 py-0.5 rounded-full whitespace-nowrap"
-      style={s}
-    >
-      {action}
-    </span>
   )
 }

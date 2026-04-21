@@ -13,12 +13,13 @@ interface PardotProspectList {
 export async function GET() {
   const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
 
-  // ── Salesforce queries ──────────────────────────────────────────────────────
-  const [mqlCount, sqlCount, discoveryCount, oppResult, wonAgg, pipelineAgg, newOpps] =
+  // ── Salesforce queries — journey-based (same prospect tracked through each stage) ─
+  const [nurtureCount, mqlCount, sqlCount, discoveryCount, oppResult, wonAgg, pipelineAgg, newOpps] =
     await Promise.all([
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Non_MQL_Date__c != null') : Promise.resolve(0),
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Not_Accepted__c = false') : Promise.resolve(0),
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Task WHERE CallType != null AND Status = \'Completed\'') : Promise.resolve(0),
+      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true') : Promise.resolve(0),
+      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true AND Non_MQL_Date__c != null') : Promise.resolve(0),
+      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true AND Non_MQL_Date__c != null AND SQL__c = true AND Not_Accepted__c = false') : Promise.resolve(0),
+      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true AND Discovery_Call__c = true') : Promise.resolve(0),
       sfCreds ? sfQuery<OppRecord>(sfCreds, 'SELECT StageName, Amount FROM Opportunity WHERE IsClosed = false AND Amount != null') : Promise.resolve(null),
       sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true AND CloseDate = LAST_N_DAYS:365') : Promise.resolve(null),
       sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsClosed = false') : Promise.resolve(null),
@@ -86,6 +87,7 @@ export async function GET() {
     period: 'Last 30 Days',
 
     // Funnel
+    nurtureCount,
     mqls: mqlCount,
     sqls: sqlCount,
     discoveryCalls: discoveryCount,

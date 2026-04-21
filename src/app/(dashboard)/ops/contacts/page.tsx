@@ -51,7 +51,6 @@ async function fetchContacts() {
     )
 
     const prospects = data?.values ?? []
-    if (!prospects.length) return null
 
     const buckets = { hot: 0, warm: 0, cold: 0, inactive: 0, suppression: 0, recycle: 0 }
     for (const p of prospects) {
@@ -152,7 +151,7 @@ export default async function ContactsPage() {
         {!isLive && (
           <div className="bg-yellow-500/8 border border-yellow-500/15 rounded-xl px-5 py-3 flex items-center gap-3">
             <svg className="w-4 h-4 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
-            <p className="text-yellow-400/80 text-sm">No data — <a href="/admin/integrations" className="underline">connect Salesforce to see contact intelligence</a>.</p>
+            <p className="text-yellow-400/80 text-sm">No data — <a href="/admin/integrations" className="underline">connect Pardot to see contact intelligence</a>.</p>
           </div>
         )}
 

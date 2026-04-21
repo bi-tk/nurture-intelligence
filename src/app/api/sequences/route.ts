@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server'
-import { getPardotCreds, pardotGet, pardotStats, pct } from '@/lib/sf-api'
+import { NextRequest, NextResponse } from 'next/server'
+import { getPardotCreds, getSfCreds, pardotGet, pardotStats, sfQuery, pct } from '@/lib/sf-api'
+import { prisma } from '@/lib/prisma'
 
 interface ListEmail {
   id?: number
@@ -10,32 +11,80 @@ interface ListEmail {
   campaignId?: number
 }
 
-interface ListEmailsResponse {
-  values?: ListEmail[]
+interface PardotCampaign {
+  id?: number
+  name?: string
 }
 
-function signal(openRate: number, clickRate: number, bounceRate: number): string {
-  if (openRate >= 25 && clickRate >= 5) return 'Hot'
-  if (openRate >= 15 || clickRate >= 3) return 'Warm'
-  if (bounceRate >= 5) return 'At Risk'
-  return 'Cold'
+interface TitleRecord {
+  Normalize_Title_del__c: string
+  expr0: number
 }
 
-export async function GET() {
-  const pardotCreds = await getPardotCreds()
+async function getSignalThresholds() {
+  try {
+    const records = await prisma.benchmark.findMany({
+      where: { metric: { in: ['signal_hot_threshold', 'signal_warm_threshold', 'signal_cold_threshold', 'signal_atrisk_bounce'] } },
+    })
+    const map = Object.fromEntries(records.map(b => [b.metric, b.warningThreshold ?? 0]))
+    return {
+      hot: map['signal_hot_threshold'] ?? 20,
+      warm: map['signal_warm_threshold'] ?? 12,
+      cold: map['signal_cold_threshold'] ?? 5,
+      atRiskBounce: map['signal_atrisk_bounce'] ?? 5,
+    }
+  } catch {
+    return { hot: 20, warm: 12, cold: 5, atRiskBounce: 5 }
+  }
+}
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = req.nextUrl
+  const dateRange = searchParams.get('dateRange') ?? '30d'
+  const segmentFilter = searchParams.get('segment') ?? ''
+
+  const [pardotCreds, sfCreds, thresholds] = await Promise.all([
+    getPardotCreds(),
+    getSfCreds(),
+    getSignalThresholds(),
+  ])
+
   if (!pardotCreds) {
-    return NextResponse.json({ sequences: [], connected: false })
+    return NextResponse.json({ sequences: [], subjectLines: [], prospectTitles: [], connected: false })
   }
 
-  const listEmailsData = await pardotGet<ListEmailsResponse>(
+  function signal(openRate: number, clickRate: number, bounceRate: number): string {
+    if (bounceRate >= thresholds.atRiskBounce) return 'At Risk'
+    if (openRate >= thresholds.hot) return 'Hot'
+    if (openRate >= thresholds.warm) return 'Warm'
+    if (openRate >= thresholds.cold) return 'Cold'
+    return 'At Risk'
+  }
+
+  // Find the tkxel | Nurture campaign
+  const campaignsData = await pardotGet<{ values?: PardotCampaign[] }>(
+    pardotCreds,
+    'campaigns?fields=id,name&limit=200'
+  )
+  const nurtureCampaign = (campaignsData?.values ?? []).find(
+    c => c.name?.toLowerCase().includes('nurture')
+  )
+  const nurtureCampaignId = nurtureCampaign?.id
+
+  const listEmailsData = await pardotGet<{ values?: ListEmail[] }>(
     pardotCreds,
     'list-emails?fields=id,name,subject,sentAt,isSent,campaignId&limit=200'
   )
 
-  const sentEmails = (listEmailsData?.values ?? [])
+  const allSentEmails = (listEmailsData?.values ?? [])
     .filter(e => e.isSent === true && e.id != null)
     .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
-    .slice(0, 50)
+
+  // Filter to nurture campaign only when a campaign ID is found
+  const sentEmails = (nurtureCampaignId
+    ? allSentEmails.filter(e => e.campaignId === nurtureCampaignId)
+    : allSentEmails
+  ).slice(0, 50)
 
   const statsResults = await Promise.all(
     sentEmails.map(e => pardotStats(pardotCreds, e.id!))
@@ -56,7 +105,7 @@ export async function GET() {
       const deliveryRate = pct(delivered, sent)
       const openRate = pct(opens, delivered)
       const clickRate = pct(clicks, delivered)
-      const ctor = pct(clicks, opens)
+      const ctr = pct(clicks, opens)
       const bounceRate = pct(bounces, sent)
       const unsubRate = pct(unsubs, delivered)
 
@@ -66,7 +115,7 @@ export async function GET() {
         segment: 'All Prospects',
         status: 'active',
         sent, delivered, opens, clicks, bounces, unsubs, spam,
-        deliveryRate, openRate, clickRate, ctor, bounceRate, unsubRate,
+        deliveryRate, openRate, clickRate, ctr, bounceRate, unsubRate,
         mqlRate: 0, sqlRate: 0, wonRevenue: 0,
         signal: signal(openRate, clickRate, bounceRate),
         sentAt: e.sentAt,
@@ -89,5 +138,43 @@ export async function GET() {
       bounces: s.bounces,
     }))
 
-  return NextResponse.json({ sequences, subjectLines, connected: true })
+  // Prospect title performance via Salesforce normalized title field
+  let prospectTitles: Array<{
+    title: string; delivered: number; opens: number; openRate: number
+    clicks: number; clickRate: number; unsubs: number; bounces: number
+  }> = []
+
+  if (sfCreds) {
+    const [totalResult, engagedResult] = await Promise.all([
+      sfQuery<TitleRecord>(
+        sfCreds,
+        'SELECT Normalize_Title_del__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalize_Title_del__c != null GROUP BY Normalize_Title_del__c ORDER BY COUNT(Id) DESC LIMIT 20'
+      ),
+      sfQuery<TitleRecord>(
+        sfCreds,
+        'SELECT Normalize_Title_del__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalize_Title_del__c != null AND pi__score__c > 0 GROUP BY Normalize_Title_del__c ORDER BY COUNT(Id) DESC LIMIT 20'
+      ),
+    ])
+
+    const engagedMap = Object.fromEntries(
+      (engagedResult?.records ?? []).map(r => [r.Normalize_Title_del__c, r.expr0])
+    )
+
+    prospectTitles = (totalResult?.records ?? []).map(r => {
+      const total = r.expr0
+      const engaged = engagedMap[r.Normalize_Title_del__c] ?? 0
+      return {
+        title: r.Normalize_Title_del__c,
+        delivered: total,
+        opens: engaged,
+        openRate: pct(engaged, total),
+        clicks: 0,
+        clickRate: 0,
+        unsubs: 0,
+        bounces: 0,
+      }
+    })
+  }
+
+  return NextResponse.json({ sequences, subjectLines, prospectTitles, connected: true })
 }
