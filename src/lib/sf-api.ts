@@ -129,6 +129,47 @@ export async function pardotGet<T = unknown>(
   }
 }
 
+// ─── Pardot list-email stats ──────────────────────────────────────────────────
+
+export interface PardotEmailStats {
+  sent?: number
+  delivered?: number
+  opens?: number
+  uniqueOpens?: number
+  totalClicks?: number
+  uniqueClicks?: number
+  optOuts?: number
+  hardBounced?: number
+  softBounced?: number
+  spamComplaints?: number
+  deliveryRate?: number
+  opensRate?: number
+  clickThroughRate?: number
+  optOutRate?: number
+  listEmailId?: number
+}
+
+export async function pardotStats(
+  creds: PardotCreds,
+  listEmailId: number
+): Promise<PardotEmailStats | null> {
+  try {
+    const res = await fetch(
+      'https://pi.pardot.com/api/v5/objects/list-emails/' + listEmailId + '/stats',
+      {
+        headers: {
+          Authorization: 'Bearer ' + creds.accessToken,
+          'Pardot-Business-Unit-Id': creds.businessUnitId,
+        },
+      }
+    )
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function pct(numerator: number, denominator: number, decimals = 1): number {

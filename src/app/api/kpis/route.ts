@@ -1,22 +1,10 @@
 import { NextResponse } from 'next/server'
-import { getSfCreds, getPardotCreds, sfQuery, sfCount, pardotGet, pct } from '@/lib/sf-api'
+import { getSfCreds, getPardotCreds, sfQuery, sfCount, pardotGet, pardotStats, pct } from '@/lib/sf-api'
 
 interface OppRecord { Amount: number; StageName: string }
 interface AggRecord { expr0: number }
-interface PardotEmailStats {
-  values?: Array<{
-    totalSentCount?: number
-    deliveredCount?: number
-    uniqueOpenCount?: number
-    totalOpenCount?: number
-    uniqueClickCount?: number
-    totalClickCount?: number
-    hardBounceCount?: number
-    softBounceCount?: number
-    optOutCount?: number
-    spamComplaintCount?: number
-  }>
-}
+interface ListEmail { id?: number; name?: string; sentAt?: string; isSent?: boolean }
+interface ListEmailsResponse { values?: ListEmail[] }
 interface PardotProspectList {
   values?: Array<{ score?: number; lastActivityAt?: string; emailBounced?: boolean; isDoNotEmail?: boolean }>
   nextPageToken?: string
@@ -42,24 +30,38 @@ export async function GET() {
   const wonOpportunities = (oppResult?.records ?? []).filter(r => r.StageName === 'Closed Won').length
   const opportunities = oppResult?.totalSize ?? 0
 
-  // ── Pardot email aggregate ──────────────────────────────────────────────────
-  const emailStats = pardotCreds
-    ? await pardotGet<PardotEmailStats>(
-        pardotCreds,
-        'emails?fields=totalSentCount,deliveredCount,uniqueOpenCount,totalOpenCount,uniqueClickCount,hardBounceCount,softBounceCount,optOutCount,spamComplaintCount&limit=200'
-      )
-    : null
+  // ── Pardot email aggregate (list-emails + per-email stats) ─────────────────
+  let totalSent = 0, totalDelivered = 0, totalUniqueOpens = 0, totalUniqueClicks = 0
+  let totalHardBounces = 0, totalSoftBounces = 0, totalUnsubs = 0, totalSpam = 0
 
-  const emails = emailStats?.values ?? []
-  const totalSent = emails.reduce((s, e) => s + (e.totalSentCount ?? 0), 0)
-  const totalDelivered = emails.reduce((s, e) => s + (e.deliveredCount ?? 0), 0)
-  const totalUniqueOpens = emails.reduce((s, e) => s + (e.uniqueOpenCount ?? 0), 0)
-  const totalUniqueClicks = emails.reduce((s, e) => s + (e.uniqueClickCount ?? 0), 0)
-  const totalHardBounces = emails.reduce((s, e) => s + (e.hardBounceCount ?? 0), 0)
-  const totalSoftBounces = emails.reduce((s, e) => s + (e.softBounceCount ?? 0), 0)
+  if (pardotCreds) {
+    const listEmailsData = await pardotGet<ListEmailsResponse>(
+      pardotCreds,
+      'list-emails?fields=id,name,sentAt,isSent&limit=200'
+    )
+    const sentEmails = (listEmailsData?.values ?? [])
+      .filter(e => e.isSent === true && e.id != null)
+      .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
+      .slice(0, 50)
+
+    const statsResults = await Promise.all(
+      sentEmails.map(e => pardotStats(pardotCreds, e.id!))
+    )
+
+    for (const s of statsResults) {
+      if (!s) continue
+      totalSent += s.sent ?? 0
+      totalDelivered += s.delivered ?? 0
+      totalUniqueOpens += s.uniqueOpens ?? 0
+      totalUniqueClicks += s.uniqueClicks ?? 0
+      totalHardBounces += s.hardBounced ?? 0
+      totalSoftBounces += s.softBounced ?? 0
+      totalUnsubs += s.optOuts ?? 0
+      totalSpam += s.spamComplaints ?? 0
+    }
+  }
+
   const totalBounces = totalHardBounces + totalSoftBounces
-  const totalUnsubs = emails.reduce((s, e) => s + (e.optOutCount ?? 0), 0)
-  const totalSpam = emails.reduce((s, e) => s + (e.spamComplaintCount ?? 0), 0)
 
   // ── Pardot prospects ────────────────────────────────────────────────────────
   const prospects = pardotCreds
