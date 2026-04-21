@@ -24,7 +24,7 @@ async function validateSalesforce(creds: Record<string, string>): Promise<{ erro
 
   try {
     const conn = new jsforce.Connection({
-      loginUrl: instanceUrl.replace(/\/$/, ''),
+      loginUrl: 'https://login.salesforce.com',
     })
     const loginPromise = conn.login(username, passwordWithToken)
     const timeoutPromise = new Promise<never>((_, reject) =>
