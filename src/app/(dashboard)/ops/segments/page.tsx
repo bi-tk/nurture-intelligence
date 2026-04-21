@@ -1,6 +1,5 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
-import { mockTopSegments, mockTopIndustries } from '@/lib/mock-data'
 import { formatPercent, formatCurrency, formatNumber } from '@/lib/utils'
 import { getPardotCreds, getSfCreds, pardotGet, sfQuery, pct } from '@/lib/sf-api'
 
@@ -81,8 +80,8 @@ export default async function SegmentsPage() {
   const live = await fetchSegmentData()
   const isLive = !!live
 
-  const segments = live?.segments?.length ? live.segments : mockTopSegments
-  const industries = live?.industries?.length ? live.industries : mockTopIndustries
+  const segments = live?.segments ?? []
+  const industries = live?.industries ?? []
 
   return (
     <div className="flex flex-col min-h-full">
@@ -97,7 +96,7 @@ export default async function SegmentsPage() {
         {!isLive && (
           <div className="bg-yellow-500/8 border border-yellow-500/15 rounded-xl px-5 py-3 flex items-center gap-3">
             <svg className="w-4 h-4 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
-            <p className="text-yellow-400/80 text-sm">Showing sample data — <a href="/admin/integrations" className="underline">connect Salesforce &amp; Pardot</a> to see live segment performance.</p>
+            <p className="text-yellow-400/80 text-sm">No data — <a href="/admin/integrations" className="underline">connect Salesforce &amp; Pardot to see live segment performance</a>.</p>
           </div>
         )}
 
@@ -112,44 +111,25 @@ export default async function SegmentsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/5">
-                  {isLive && live?.pardotConnected
-                    ? ['List Name', 'Members', 'Open Rate', 'Click Rate', 'MQL Rate', 'Action'].map(h => (
-                        <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">{h}</th>
-                      ))
-                    : ['Segment', 'Delivered', 'Open Rate', 'Opens', 'Click Rate', 'Clicks', 'MQL Rate', 'Unsub', 'Bounce', 'Trend', 'Action'].map(h => (
-                        <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">{h}</th>
-                      ))
-                  }
+                  {['List Name', 'Members', 'Open Rate', 'Click Rate', 'MQL Rate', 'Action'].map(h => (
+                    <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {isLive && live?.pardotConnected
-                  ? segments.map((s) => (
-                      <tr key={s.name} className="hover:bg-white/2">
-                        <td className="px-5 py-3 text-white whitespace-nowrap max-w-[240px]"><p className="truncate">{s.name}</p></td>
-                        <td className="px-5 py-3 font-mono text-white/70">{'memberCount' in s ? formatNumber((s as { memberCount: number }).memberCount) : '—'}</td>
-                        <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.openRate ?? 0)}</td>
-                        <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.clickRate ?? 0)}</td>
-                        <td className="px-5 py-3 font-mono text-pulse-blue font-medium">{formatPercent(s.mqlRate ?? 0)}</td>
-                        <td className="px-5 py-3"><ActionBadge action="Optimize" /></td>
-                      </tr>
-                    ))
-                  : (mockTopSegments as typeof mockTopSegments).map((s) => (
-                      <tr key={s.name} className="hover:bg-white/2">
-                        <td className="px-5 py-3 text-white whitespace-nowrap">{s.name}</td>
-                        <td className="px-5 py-3 font-mono text-white/70">—</td>
-                        <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.openRate)}</td>
-                        <td className="px-5 py-3 font-mono text-white/70">—</td>
-                        <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.clickRate)}</td>
-                        <td className="px-5 py-3 font-mono text-white/70">—</td>
-                        <td className="px-5 py-3 font-mono text-pulse-blue font-medium">{formatPercent(s.mqlRate)}</td>
-                        <td className="px-5 py-3 font-mono text-white/70">—</td>
-                        <td className="px-5 py-3 font-mono text-white/70">—</td>
-                        <td className="px-5 py-3 text-accent-green text-xs font-mono">↑ improving</td>
-                        <td className="px-5 py-3"><ActionBadge action="Optimize" /></td>
-                      </tr>
-                    ))
-                }
+                {segments.length === 0 && (
+                  <tr><td colSpan={6} className="px-5 py-8 text-center text-white/30 text-sm">No data — connect Salesforce &amp; Pardot to see segment performance</td></tr>
+                )}
+                {segments.map((s) => (
+                  <tr key={s.name} className="hover:bg-white/2">
+                    <td className="px-5 py-3 text-white whitespace-nowrap max-w-[240px]"><p className="truncate">{s.name}</p></td>
+                    <td className="px-5 py-3 font-mono text-white/70">{'memberCount' in s ? formatNumber((s as { memberCount: number }).memberCount) : '—'}</td>
+                    <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.openRate ?? 0)}</td>
+                    <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.clickRate ?? 0)}</td>
+                    <td className="px-5 py-3 font-mono text-pulse-blue font-medium">{formatPercent(s.mqlRate ?? 0)}</td>
+                    <td className="px-5 py-3"><ActionBadge action="Optimize" /></td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -171,6 +151,9 @@ export default async function SegmentsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
+              {industries.length === 0 && (
+                <tr><td colSpan={3} className="px-5 py-8 text-center text-white/30 text-sm">No data — connect Salesforce to see industry performance</td></tr>
+              )}
               {industries.map((ind) => (
                 <tr key={ind.name} className="hover:bg-white/2">
                   <td className="px-5 py-3 text-white">{ind.name}</td>

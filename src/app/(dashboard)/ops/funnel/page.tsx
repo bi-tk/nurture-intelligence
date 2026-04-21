@@ -2,7 +2,6 @@ import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import FunnelChart from '@/components/charts/FunnelChart'
 import KpiCard from '@/components/ui/KpiCard'
-import { mockFunnelData, mockExecutiveKPIs as mockKpi } from '@/lib/mock-data'
 import { formatPercent } from '@/lib/utils'
 import { getSfCreds, getPardotCreds, sfCount, pardotGet } from '@/lib/sf-api'
 
@@ -46,15 +45,15 @@ async function fetchFunnelData() {
 export default async function FunnelPage() {
   const session = await auth()
   const live = await fetchFunnelData()
-  const funnelData = live?.stages ?? mockFunnelData
+  const funnelData = live?.stages ?? []
   const isLive = !!live
 
-  const totalLeads = live?.totalLeads ?? 8420
-  const mqls = live?.mqls ?? mockKpi.mqls
-  const sqls = live?.sqls ?? mockKpi.sqls
-  const discoveryCalls = live?.discoveryCalls ?? mockKpi.discoveryCalls
-  const opps = live?.opps ?? mockKpi.opportunities
-  const wonOpps = live?.wonOpps ?? mockKpi.wonOpportunities
+  const totalLeads = live?.totalLeads ?? 0
+  const mqls = live?.mqls ?? 0
+  const sqls = live?.sqls ?? 0
+  const discoveryCalls = live?.discoveryCalls ?? 0
+  const opps = live?.opps ?? 0
+  const wonOpps = live?.wonOpps ?? 0
 
   const avgTimes = [
     { label: 'Avg Time to MQL', value: '14d', sub: 'from nurture entry' },
@@ -76,7 +75,7 @@ export default async function FunnelPage() {
         {!isLive && (
           <div className="bg-yellow-500/8 border border-yellow-500/15 rounded-xl px-5 py-3 flex items-center gap-3">
             <svg className="w-4 h-4 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
-            <p className="text-yellow-400/80 text-sm">Showing sample data — <a href="/admin/integrations" className="underline">connect Salesforce</a> to see live funnel counts.</p>
+            <p className="text-yellow-400/80 text-sm">No data — <a href="/admin/integrations" className="underline">connect Salesforce to see live funnel counts</a>.</p>
           </div>
         )}
 

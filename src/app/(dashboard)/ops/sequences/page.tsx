@@ -1,6 +1,5 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
-import { mockOpsSequences, mockSubjectLinePerformance, mockProspectTitlePerformance } from '@/lib/mock-data'
 import { formatNumber, formatPercent, formatCurrency, cn } from '@/lib/utils'
 import { getPardotCreds, pardotGet, pct } from '@/lib/sf-api'
 
@@ -59,8 +58,8 @@ async function fetchSequences() {
 export default async function SequencesPage() {
   const session = await auth()
   const live = await fetchSequences()
-  const sequences = live?.sequences ?? mockOpsSequences
-  const subjectLines = live?.subjectLines ?? mockSubjectLinePerformance
+  const sequences = live?.sequences ?? []
+  const subjectLines = live?.subjectLines ?? []
   const isLive = !!live
 
   return (
@@ -76,7 +75,7 @@ export default async function SequencesPage() {
         {!isLive && (
           <div className="bg-yellow-500/8 border border-yellow-500/15 rounded-xl px-5 py-3 flex items-center gap-3">
             <svg className="w-4 h-4 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
-            <p className="text-yellow-400/80 text-sm">Showing sample data — <a href="/admin/integrations" className="underline">connect Pardot</a> to see live sequence stats.</p>
+            <p className="text-yellow-400/80 text-sm">No data — <a href="/admin/integrations" className="underline">connect Salesforce to see sequence performance</a>.</p>
           </div>
         )}
 
@@ -92,6 +91,9 @@ export default async function SequencesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
+                {sequences.length === 0 && (
+                  <tr><td colSpan={17} className="px-4 py-8 text-center text-white/30 text-sm">No data — connect Salesforce to see sequence performance</td></tr>
+                )}
                 {sequences.map((s) => (
                   <tr key={s.name} className="hover:bg-white/2 transition-colors">
                     <td className="px-4 py-3 text-white font-medium whitespace-nowrap max-w-[200px]"><p className="truncate">{s.name}</p></td>
@@ -167,18 +169,7 @@ export default async function SequencesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {mockProspectTitlePerformance.map((row) => (
-                  <tr key={row.title} className="hover:bg-white/2 transition-colors">
-                    <td className="px-4 py-3 text-white/80 whitespace-nowrap">{row.title}</td>
-                    <td className="px-4 py-3 text-white/70 font-mono">{formatNumber(row.delivered)}</td>
-                    <td className="px-4 py-3 text-white/70 font-mono">{formatNumber(row.opens)}</td>
-                    <td className="px-4 py-3 font-mono"><MetricCell value={row.openRate} warn={20} bad={15} invert={false} /></td>
-                    <td className="px-4 py-3 text-white/70 font-mono">{formatNumber(row.clicks)}</td>
-                    <td className="px-4 py-3 font-mono"><MetricCell value={row.clickRate} warn={3} bad={2} invert={false} /></td>
-                    <td className="px-4 py-3 text-white/70 font-mono">{formatNumber(row.unsubs)}</td>
-                    <td className="px-4 py-3 text-white/70 font-mono">{formatNumber(row.bounces)}</td>
-                  </tr>
-                ))}
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-white/30 text-sm">No data — connect Salesforce to see performance by prospect title</td></tr>
               </tbody>
             </table>
           </div>

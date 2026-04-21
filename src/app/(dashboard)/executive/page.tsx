@@ -5,11 +5,6 @@ import FunnelChart from '@/components/charts/FunnelChart'
 import TrendChart from '@/components/charts/TrendChart'
 import DualTrendChart from '@/components/charts/DualTrendChart'
 import { formatNumber, formatCurrency, formatPercent } from '@/lib/utils'
-import {
-  mockExecutiveKPIs, mockTopSequences, mockWorstSequences,
-  mockTopSegments, mockTopIndustries, mockFunnelData,
-  mockTrendData, mockAiInsight, mockWeeklyTrend, mockMonthlyTrend,
-} from '@/lib/mock-data'
 import { getSfCreds, getPardotCreds, sfQuery, sfCount, pardotGet, pct } from '@/lib/sf-api'
 
 // ─── Fetch real data server-side ──────────────────────────────────────────────
@@ -141,18 +136,26 @@ export default async function ExecutivePage() {
     fetchKpis(), fetchFunnelData(), fetchTopSequences(), fetchSegments(),
   ])
 
-  const kpi = liveKpi ?? mockExecutiveKPIs
-  const funnelData = liveFunnel ?? mockFunnelData
-  const topSequences = liveSeqData?.topSequences ?? mockTopSequences
-  const worstSequences = liveSeqData?.worstSequences ?? mockWorstSequences
-  const topSegments = liveSegments ?? mockTopSegments
+  const zeroKpi = {
+    wonRevenue: 0, pipelineValue: 0, wonOpportunities: 0, opportunitiesCreated: 0,
+    mqls: 0, sqls: 0, discoveryCalls: 0, engagedAudience: 0, engagedRate: 0,
+    totalAudience: 0, emailsSent: 0, deliveryRate: 0, uniqueOpenRate: 0,
+    uniqueClickRate: 0, bounceRate: 0, unsubscribeRate: 0,
+    opensCount: 0, clicksCount: 0, unsubscribesCount: 0, bouncesCount: 0, spamCount: 0,
+    prospectsOpenedAny: 0, prospectsClickedAny: 0, prospectsNoEngagement: 0,
+  }
+  const kpi = liveKpi ?? zeroKpi
+  const funnelData = liveFunnel ?? []
+  const topSequences = liveSeqData?.topSequences ?? []
+  const worstSequences = liveSeqData?.worstSequences ?? []
+  const topSegments = liveSegments ?? []
   const isLive = !!liveKpi
 
   return (
     <div className="flex flex-col min-h-full">
       <Header
         title="Executive Overview"
-        subtitle={isLive ? 'Live Salesforce + Pardot Data' : (kpi as typeof mockExecutiveKPIs).period ?? 'Sample Data'}
+        subtitle={isLive ? 'Live Salesforce + Pardot Data' : 'Connect Salesforce & Pardot to see live data'}
         userName={session?.user?.name}
         userRole={session?.user?.role!}
       />
@@ -174,7 +177,7 @@ export default async function ExecutivePage() {
           </div>
           <div>
             <p className="text-pulse-blue text-xs font-mono uppercase tracking-widest mb-2">AI Executive Summary</p>
-            <p className="text-white/70 text-sm leading-relaxed whitespace-pre-line">{mockAiInsight}</p>
+            <p className="text-white/70 text-sm leading-relaxed whitespace-pre-line">{isLive ? 'AI summary will appear here once data is loaded.' : 'Connect Salesforce & Pardot to generate AI executive summaries.'}</p>
           </div>
         </div>
 
@@ -185,7 +188,7 @@ export default async function ExecutivePage() {
             <KpiCard label="Won Revenue" value={formatCurrency(kpi.wonRevenue)} accent large />
             <KpiCard label="Pipeline Value" value={formatCurrency(kpi.pipelineValue)} />
             <KpiCard label="Won Opportunities" value={formatNumber(kpi.wonOpportunities)} />
-            <KpiCard label="Opportunities Created" value={formatNumber('opportunitiesCreated' in kpi ? kpi.opportunitiesCreated : kpi.opportunities)} />
+            <KpiCard label="Opportunities Created" value={formatNumber('opportunitiesCreated' in kpi ? (kpi as { opportunitiesCreated: number }).opportunitiesCreated : (kpi as { opportunities: number }).opportunities)} />
           </div>
         </div>
 
@@ -222,7 +225,7 @@ export default async function ExecutivePage() {
             <KpiCard label="Unsubscribed" value={kpi.unsubscribesCount.toLocaleString()} />
             <KpiCard label="Bounced" value={kpi.bouncesCount.toLocaleString()} />
             <KpiCard label="Spam Complaints" value={kpi.spamCount.toLocaleString()} />
-            <KpiCard label="Avg Sales Cycle" value={'avgSalesCycleDays' in kpi ? `${kpi.avgSalesCycleDays} days` : '—'} />
+            <KpiCard label="Avg Sales Cycle" value={'avgSalesCycleDays' in kpi ? `${(kpi as { avgSalesCycleDays: number }).avgSalesCycleDays} days` : '—'} />
           </div>
         </div>
 
@@ -230,7 +233,7 @@ export default async function ExecutivePage() {
         <div>
           <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-3">Prospect Engagement</p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <KpiCard label="Total Audience" value={('totalAudience' in kpi ? (kpi as { totalAudience: number }).totalAudience : (kpi as { prospectsAddedToNurture: number }).prospectsAddedToNurture).toLocaleString()} />
+            <KpiCard label="Total Audience" value={('totalAudience' in kpi ? (kpi as { totalAudience: number }).totalAudience : 0).toLocaleString()} />
             <KpiCard label="Opened Any Email" value={kpi.prospectsOpenedAny.toLocaleString()} />
             <KpiCard label="Clicked Any Email" value={kpi.prospectsClickedAny.toLocaleString()} />
             <KpiCard label="No Engagement" value={kpi.prospectsNoEngagement.toLocaleString()} />
@@ -245,7 +248,7 @@ export default async function ExecutivePage() {
           </div>
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
             <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-4">12-Month Trend — Open Rate &amp; MQLs</p>
-            <TrendChart data={mockTrendData} />
+            <TrendChart data={[]} />
           </div>
         </div>
 
@@ -253,9 +256,9 @@ export default async function ExecutivePage() {
         <div>
           <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-3">Trend Analysis</p>
           <div className="space-y-4">
-            <DualTrendChart title="Email Opens & Clicks" type="bar-line" weeklyData={mockWeeklyTrend} monthlyData={mockMonthlyTrend} bars={[{key:'opens',color:'#2952FF'},{key:'opensPrev',color:'#1a3299'}]} lines={[{key:'clicks',color:'#00C875'}]} />
-            <DualTrendChart title="Bounce & Unsubscribe Rates" type="line-only" weeklyData={mockWeeklyTrend} monthlyData={mockMonthlyTrend} lines={[{key:'bounceRate',color:'#fb923c'},{key:'unsubRate',color:'#c084fc'},{key:'bounceRatePrev',color:'#fb923c',dashed:true},{key:'unsubRatePrev',color:'#c084fc',dashed:true}]} />
-            <DualTrendChart title="New Prospects Added" type="bar-line" weeklyData={mockWeeklyTrend} monthlyData={mockMonthlyTrend} bars={[{key:'prospectsAdded',color:'#1D9E75'},{key:'prospectsAddedPrev',color:'#085041'}]} />
+            <DualTrendChart title="Email Opens & Clicks" type="bar-line" weeklyData={[]} monthlyData={[]} bars={[{key:'opens',color:'#2952FF'},{key:'opensPrev',color:'#1a3299'}]} lines={[{key:'clicks',color:'#00C875'}]} />
+            <DualTrendChart title="Bounce & Unsubscribe Rates" type="line-only" weeklyData={[]} monthlyData={[]} lines={[{key:'bounceRate',color:'#fb923c'},{key:'unsubRate',color:'#c084fc'},{key:'bounceRatePrev',color:'#fb923c',dashed:true},{key:'unsubRatePrev',color:'#c084fc',dashed:true}]} />
+            <DualTrendChart title="New Prospects Added" type="bar-line" weeklyData={[]} monthlyData={[]} bars={[{key:'prospectsAdded',color:'#1D9E75'},{key:'prospectsAddedPrev',color:'#085041'}]} />
           </div>
         </div>
 
@@ -318,22 +321,11 @@ export default async function ExecutivePage() {
           </div>
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
             <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-4">Top Industries by MQLs</p>
-            <div className="space-y-3">
-              {mockTopIndustries.map((ind, i) => (
-                <div key={ind.name} className="flex items-center gap-3">
-                  <span className="w-5 h-5 rounded bg-graphite-700 flex items-center justify-center text-white/30 text-xs font-mono">{i+1}</span>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1">
-                      <p className="text-white text-sm">{ind.name}</p>
-                      <p className="text-white/50 text-xs font-mono">{ind.mqls} MQLs · {formatCurrency(ind.revenue)}</p>
-                    </div>
-                    <div className="h-1 bg-graphite-700 rounded-full overflow-hidden">
-                      <div className="h-full gradient-core-flow rounded-full" style={{width:`${(ind.mqls/mockTopIndustries[0].mqls)*100}%`}} />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+            {isLive ? (
+              <p className="text-white/30 text-sm">No industry data available.</p>
+            ) : (
+              <p className="text-white/30 text-sm">Connect Salesforce to see industry breakdown.</p>
+            )}
           </div>
         </div>
 
