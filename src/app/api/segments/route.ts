@@ -1,20 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPardotCreds, getSfCreds, pardotGet, sfQuery } from '@/lib/sf-api'
 
-interface PardotList {
-  id?: number
-  name?: string
-  title?: string
-  isDynamic?: boolean
-  memberCount?: number
-  totalMembers?: number
-  description?: string
-}
+const NURTURE_LISTS = [
+  { id: 338651, name: 'Nurture | CIOs & Tech Leaders | Non-Tech | $50–$500M' },
+  { id: 338939, name: 'Nurture | CEOs & Non-Tech Leaders | Non-Tech' },
+  { id: 412789, name: 'Nurture | CEOs & Non-Tech Leaders | Tech | Under $50M' },
+  { id: 412798, name: 'Nurture | CTOs & Tech Leaders | Tech | Under $50M' },
+  { id: 412807, name: 'Nurture | CTOs & Tech Leaders | Funded Tech Startups' },
+  { id: 412810, name: 'Nurture | Managing Partners | Private Equity' },
+  { id: 509437, name: 'Nurture | CIOs & Tech Leaders | Non-Tech | Under $50M new' },
+  { id: 619875, name: 'Nurture & Future Interest' },
+]
 
-interface IndustryRecord {
-  Normalized_Industry__c: string
-  expr0: number
-}
+interface ListMembership { id?: number }
+interface IndustryRecord { Normalized_Industry__c: string; expr0: number }
 
 type SegmentRow = {
   name: string
@@ -24,41 +23,31 @@ type SegmentRow = {
 }
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = req.nextUrl
-
   const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
 
-  const makeEmptyRow = (name: string, delivered: number): SegmentRow => ({
-    name, delivered,
-    sent: 0, opens: 0, clicks: 0, bounces: 0,
-    deliveryRate: 0, openRate: 0, clickRate: 0, ctr: 0,
-    unsubRate: 0, mqlRate: 0, sqlRate: 0, wonRevenue: 0,
-  })
-
-  // ── Pardot lists — only dynamic lists starting with "Nurture" ─────────────────
-  const listData = pardotCreds
-    ? await pardotGet<{ values?: PardotList[] }>(
-        pardotCreds,
-        'lists?fields=id,name,title,isDynamic,memberCount,totalMembers,description&limit=200'
+  // Count members for each nurture list via list-memberships (parallel)
+  const memberCounts = pardotCreds
+    ? await Promise.all(
+        NURTURE_LISTS.map(list =>
+          pardotGet<{ values?: ListMembership[] }>(
+            pardotCreds,
+            `list-memberships?fields=id&listId=${list.id}&limit=1000`
+          ).then(res => res?.values?.length ?? 0)
+        )
       )
-    : null
+    : NURTURE_LISTS.map(() => 0)
 
-  const allLists = listData?.values ?? []
+  const segments: SegmentRow[] = NURTURE_LISTS
+    .map((list, i) => ({
+      name: list.name,
+      delivered: memberCounts[i],
+      sent: 0, opens: 0, clicks: 0, bounces: 0,
+      deliveryRate: 0, openRate: 0, clickRate: 0, ctr: 0,
+      unsubRate: 0, mqlRate: 0, sqlRate: 0, wonRevenue: 0,
+    }))
+    .sort((a, b) => b.delivered - a.delivered)
 
-  const nurtureLists = allLists.filter(
-    l => l.isDynamic === true && (l.name ?? l.title ?? '').startsWith('Nurture')
-  )
-
-  const segments: SegmentRow[] = nurtureLists.length
-    ? nurtureLists
-        .map(l => makeEmptyRow(
-          l.name ?? l.title ?? `List ${l.id}`,
-          l.memberCount ?? l.totalMembers ?? 0
-        ))
-        .sort((a, b) => b.delivered - a.delivered)
-    : []
-
-  // ── Salesforce industry breakdown from nurture leads ──────────────────────────
+  // Salesforce industry breakdown from nurture leads
   const industryResult = sfCreds
     ? await sfQuery<IndustryRecord>(
         sfCreds,
@@ -66,9 +55,13 @@ export async function GET(req: NextRequest) {
       )
     : null
 
-  const industries: SegmentRow[] = (industryResult?.records ?? []).map(r =>
-    makeEmptyRow(r.Normalized_Industry__c, r.expr0)
-  )
+  const industries: SegmentRow[] = (industryResult?.records ?? []).map(r => ({
+    name: r.Normalized_Industry__c,
+    delivered: r.expr0,
+    sent: 0, opens: 0, clicks: 0, bounces: 0,
+    deliveryRate: 0, openRate: 0, clickRate: 0, ctr: 0,
+    unsubRate: 0, mqlRate: 0, sqlRate: 0, wonRevenue: 0,
+  }))
 
   return NextResponse.json({
     segments,

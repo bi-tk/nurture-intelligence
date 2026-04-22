@@ -2,20 +2,19 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPardotCreds, pardotGet, pardotStats, pct } from '@/lib/sf-api'
 import { prisma } from '@/lib/prisma'
 
+const NURTURE_LIST_IDS = new Set([338651, 338939, 412789, 412798, 412807, 412810, 509437, 619875])
+
 interface ListEmail {
   id?: number
   name?: string
   subject?: string
   sentAt?: string
   isSent?: boolean
-  campaignId?: number
-  listIds?: number[]
 }
 
-interface PardotListMeta {
+interface ListEmailDetail {
   id?: number
-  name?: string
-  isDynamic?: boolean
+  recipientLists?: Array<{ id?: number }> | { values?: Array<{ id?: number }> }
 }
 
 interface PardotProspect {
@@ -59,30 +58,38 @@ export async function GET(req: NextRequest) {
     return 'At Risk'
   }
 
-  // Get nurture dynamic list IDs to filter list-emails
-  const [listMeta, listEmailsData, prospectData] = await Promise.all([
-    pardotGet<{ values?: PardotListMeta[] }>(pardotCreds, 'lists?fields=id,name,isDynamic&limit=200'),
-    pardotGet<{ values?: ListEmail[] }>(pardotCreds, 'list-emails?fields=id,name,subject,sentAt,isSent,campaignId,listIds&limit=200'),
+  // Fetch sent emails and prospect titles in parallel
+  const [listEmailsData, prospectData] = await Promise.all([
+    pardotGet<{ values?: ListEmail[] }>(pardotCreds, 'list-emails?fields=id,name,subject,sentAt,isSent&limit=200'),
     pardotGet<{ values?: PardotProspect[] }>(pardotCreds, 'prospects?fields=id,jobTitle,score&limit=1000'),
   ])
-
-  const nurtureListIds = new Set(
-    (listMeta?.values ?? [])
-      .filter(l => l.isDynamic === true && (l.name ?? '').startsWith('Nurture'))
-      .map(l => l.id)
-      .filter((id): id is number => id != null)
-  )
 
   const allSentEmails = (listEmailsData?.values ?? [])
     .filter(e => e.isSent === true && e.id != null)
     .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
+    .slice(0, 50)
 
-  // Filter to nurture list emails; fall back to all sent emails if field not supported
-  const filtered = nurtureListIds.size > 0
-    ? allSentEmails.filter(e => (e.listIds ?? []).some(id => nurtureListIds.has(id)))
+  // Fetch individual email details to determine recipientLists
+  const detailResults = await Promise.all(
+    allSentEmails.map(e =>
+      pardotGet<ListEmailDetail>(pardotCreds, `list-emails/${e.id}?fields=id,recipientLists.id`)
+    )
+  )
+
+  // Find emails sent to any nurture list; fall back to all if none match
+  const nurtureIndices = allSentEmails.reduce<number[]>((acc, _e, i) => {
+    const detail = detailResults[i]
+    if (!detail) return acc
+    const lists: Array<{ id?: number }> = Array.isArray(detail.recipientLists)
+      ? detail.recipientLists
+      : (detail.recipientLists as { values?: Array<{ id?: number }> })?.values ?? []
+    if (lists.some(l => l.id != null && NURTURE_LIST_IDS.has(l.id))) acc.push(i)
+    return acc
+  }, [])
+
+  const sentEmails = nurtureIndices.length > 0
+    ? nurtureIndices.map(i => allSentEmails[i])
     : allSentEmails
-
-  const sentEmails = (filtered.length > 0 ? filtered : allSentEmails).slice(0, 50)
 
   const statsResults = await Promise.all(
     sentEmails.map(e => pardotStats(pardotCreds, e.id!))
@@ -129,7 +136,7 @@ export async function GET(req: NextRequest) {
       unsubs: s.unsubs, bounces: s.bounces,
     }))
 
-  // Prospect title performance — Pardot prospects grouped by jobTitle in JS
+  // Prospect title performance — Pardot prospects grouped by jobTitle
   const prospects = prospectData?.values ?? []
   const titleMap: Record<string, { delivered: number; opens: number; clicks: number }> = {}
   for (const p of prospects) {

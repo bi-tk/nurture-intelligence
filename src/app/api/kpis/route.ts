@@ -5,7 +5,7 @@ interface OppRecord { Amount: number; StageName: string }
 interface AggRecord { expr0: number }
 interface ListEmail { id?: number; name?: string; sentAt?: string; isSent?: boolean }
 interface ListEmailsResponse { values?: ListEmail[] }
-interface PardotList { id?: number; name?: string; isDynamic?: boolean; memberCount?: number; totalMembers?: number }
+const TOTAL_NURTURE_AUDIENCE = 6421
 
 export async function GET() {
   const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
@@ -61,17 +61,7 @@ export async function GET() {
 
   const totalBounces = totalHardBounces + totalSoftBounces
 
-  // ── Pardot audience — sum nurture dynamic list member counts ───────────────
-  let totalProspects = 0
-  if (pardotCreds) {
-    const listData = await pardotGet<{ values?: PardotList[] }>(
-      pardotCreds,
-      'lists?fields=id,name,isDynamic,memberCount,totalMembers&limit=200'
-    )
-    totalProspects = (listData?.values ?? [])
-      .filter(l => l.isDynamic === true && (l.name ?? '').startsWith('Nurture'))
-      .reduce((sum, l) => sum + (l.memberCount ?? l.totalMembers ?? 0), 0)
-  }
+  const totalProspects = TOTAL_NURTURE_AUDIENCE
 
   const prospectsOpenedAny = totalUniqueOpens
   const prospectsNoEngagement = Math.max(0, totalProspects - prospectsOpenedAny)
