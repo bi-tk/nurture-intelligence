@@ -74,15 +74,21 @@ export async function getPardotCreds(): Promise<PardotCreds | null> {
   ])
   if (pardot?.status !== 'connected') return null
 
-  // Always use a fresh SF token for Pardot calls
-  const freshSf = await getSfCreds()
-  if (!freshSf) return null
-
   const pardotSettings = pardot.settings as Record<string, string> | null
   const businessUnitId = pardotSettings?.businessUnitId
   if (!businessUnitId) return null
 
-  return { accessToken: freshSf.accessToken, businessUnitId }
+  // Try a fresh SF token first; fall back to the stored token if health check/refresh fails
+  try {
+    const freshSf = await getSfCreds()
+    if (freshSf) return { accessToken: freshSf.accessToken, businessUnitId }
+  } catch { /* fall through */ }
+
+  const sfSettings = sf?.settings as Record<string, string> | null
+  const storedToken = sfSettings?.accessToken
+  if (!storedToken) return null
+
+  return { accessToken: storedToken, businessUnitId }
 }
 
 // ─── Salesforce SOQL ──────────────────────────────────────────────────────────
