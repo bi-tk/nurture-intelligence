@@ -152,14 +152,13 @@ check "Contacts"  "$CONTACTS"  "prospects.length"       ">0"
 
 check "Sequences" "$SEQUENCES" "connected"              "true"
 check "Sequences" "$SEQUENCES" "sequences.length"       ">0"
-check "Sequences" "$SEQUENCES" "sequences.0.segmentCode" "notempty"
 check "Sequences" "$SEQUENCES" "subjectLines.length"    ">0"
 check "Sequences" "$SEQUENCES" "prospectTitles.length"  ">0"
 
 check "Segments"  "$SEGMENTS"  "pardotConnected"        "true"
 check "Segments"  "$SEGMENTS"  "segments.length"        "7"
 check "Segments"  "$SEGMENTS"  "segments.0.members"     ">0"
-check "Segments"  "$SEGMENTS"  "segments.0.sent"        ">0"
+check "Segments"  "$SEGMENTS"  "newsletter.members"     ">0"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

@@ -7,6 +7,8 @@ import SequencesTables from '@/components/tables/SequencesTables'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
+const NURTURE_LIST_IDS = new Set([338651, 338939, 412789, 412798, 412807, 412810, 509437])
+
 const SEGMENT_CODE_TO_LIST_ID: Record<string, number> = {
   CIO_NT_MM: 338651,
   CEO_NT: 338939,
@@ -50,6 +52,10 @@ function extractEmailNumber(name: string): string {
 }
 
 interface ListEmail { id?: number; name?: string; subject?: string; sentAt?: string; isSent?: boolean }
+interface ListEmailDetail {
+  id?: number
+  recipientLists?: Array<{ id?: number }> | { values?: Array<{ id?: number }> }
+}
 interface PardotProspect { id?: number; jobTitle?: string; score?: number }
 
 async function getSignalThresholds() {
@@ -82,20 +88,36 @@ async function getSequencesData() {
       pardotGet<{ values?: PardotProspect[] }>(creds, 'prospects?fields=id,jobTitle,score&limit=1000'),
     ])
 
-    const nsEmails = (listEmailsData?.values ?? [])
+    const allSentEmails = (listEmailsData?.values ?? [])
       .filter(e => {
         if (e.isSent !== true || e.id == null) return false
-        const n = e.name ?? ''
-        const nLower = n.toLowerCase()
-        if (nLower.includes('copy') || nLower.includes(' test') || nLower.includes('testing')) return false
-        return extractSegmentCode(n) !== null
+        const n = (e.name ?? '').toLowerCase()
+        return !n.includes('copy') && !n.includes(' test') && !n.includes('testing')
       })
       .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
-      .slice(0, 100)
+      .slice(0, 50)
 
-    const statsResults = await Promise.all(nsEmails.map(e => pardotStats(creds, e.id!)))
+    const detailResults = await Promise.all(
+      allSentEmails.map(e => pardotGet<ListEmailDetail>(creds, `list-emails/${e.id}?fields=id,recipientLists.id`))
+    )
 
-    const sequences = nsEmails
+    const nurtureIndices = allSentEmails.reduce<number[]>((acc, _e, i) => {
+      const detail = detailResults[i]
+      if (!detail) return acc
+      const lists: Array<{ id?: number }> = Array.isArray(detail.recipientLists)
+        ? detail.recipientLists
+        : (detail.recipientLists as { values?: Array<{ id?: number }> })?.values ?? []
+      if (lists.some(l => l.id != null && NURTURE_LIST_IDS.has(l.id))) acc.push(i)
+      return acc
+    }, [])
+
+    const sentEmails = nurtureIndices.length > 0
+      ? nurtureIndices.map(i => allSentEmails[i])
+      : allSentEmails
+
+    const statsResults = await Promise.all(sentEmails.map(e => pardotStats(creds, e.id!)))
+
+    const sequences = sentEmails
       .map((e, i) => {
         const s = statsResults[i]
         if (!s) return null
