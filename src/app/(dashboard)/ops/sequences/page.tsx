@@ -7,30 +7,44 @@ import SequencesTables from '@/components/tables/SequencesTables'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-const NURTURE_LIST_IDS = new Set([338651, 338939, 412789, 412798, 412807, 412810, 509437])
-
-const SEGMENT_CODE_MAP: Record<string, string> = {
-  CIO_NT_MM: 'CIOs Non-Tech Mid-Market',
-  CIO_NT_U50: 'CIOs Non-Tech Under $50M',
-  CEO_T_U50: 'CEOs Tech Under $50M',
-  CTO_T_U50: 'CTOs Tech Under $50M',
-  CEO_NT: 'CEOs Non-Tech',
-  CTO_FTS: 'CTOs Funded Tech Startups',
-  PE_MP: 'Private Equity Managing Partners',
+const SEGMENT_CODE_TO_LIST_ID: Record<string, number> = {
+  CIO_NT_MM: 338651,
+  CEO_NT: 338939,
+  CEO_T_U50: 412789,
+  CTO_T_U50: 412798,
+  CTO_FTS: 412807,
+  PE_MP: 412810,
+  CIO_NT_U50: 509437,
 }
-const SEGMENT_CODE_ORDER = ['CIO_NT_MM', 'CIO_NT_U50', 'CEO_T_U50', 'CTO_T_U50', 'CEO_NT', 'CTO_FTS', 'PE_MP']
-function parseSegmentLabel(name: string): string {
-  for (const code of SEGMENT_CODE_ORDER) {
-    if (name.includes(code)) return SEGMENT_CODE_MAP[code]
+
+const SEGMENT_NAME_MAP: Record<string, string> = {
+  CIO_NT_MM: 'CIOs & Tech Leaders | Non-Tech | $50–$500M',
+  CEO_NT: 'CEOs & Non-Tech Leaders | Non-Tech',
+  CEO_T_U50: 'CEOs & Non-Tech Leaders | Tech | Under $50M',
+  CTO_T_U50: 'CTOs & Tech Leaders | Tech | Under $50M',
+  CTO_FTS: 'CTOs & Tech Leaders | Funded Tech Startups',
+  PE_MP: 'Managing Partners | Private Equity',
+  CIO_NT_U50: 'CIOs & Tech Leaders | Non-Tech | Under $50M new',
+}
+
+function extractSegmentCode(name: string): string | null {
+  const parts = name.split(' | ')
+  if (parts.length >= 2 && parts[0].trim() === 'NS') {
+    const code = parts[1].trim()
+    if (SEGMENT_CODE_TO_LIST_ID[code] !== undefined) return code
+  }
+  return null
+}
+
+function extractEmailNumber(name: string): string {
+  for (const part of name.split(' | ')) {
+    const m = part.trim().match(/^(E\d+)/)
+    if (m) return m[1]
   }
   return ''
 }
 
 interface ListEmail { id?: number; name?: string; subject?: string; sentAt?: string; isSent?: boolean }
-interface ListEmailDetail {
-  id?: number
-  recipientLists?: Array<{ id?: number }> | { values?: Array<{ id?: number }> }
-}
 interface PardotProspect { id?: number; jobTitle?: string; score?: number }
 
 async function getSignalThresholds() {
@@ -63,41 +77,26 @@ async function getSequencesData() {
       pardotGet<{ values?: PardotProspect[] }>(creds, 'prospects?fields=id,jobTitle,score&limit=1000'),
     ])
 
-    const allSentEmails = (listEmailsData?.values ?? [])
+    const nsEmails = (listEmailsData?.values ?? [])
       .filter(e => {
         if (e.isSent !== true || e.id == null) return false
-        const n = (e.name ?? '').toLowerCase()
-        return !n.includes('copy') && !n.includes('test') && !n.includes('testing')
+        const n = e.name ?? ''
+        const nLower = n.toLowerCase()
+        if (nLower.includes('copy') || nLower.includes(' test') || nLower.includes('testing')) return false
+        return extractSegmentCode(n) !== null
       })
       .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
-      .slice(0, 50)
+      .slice(0, 100)
 
-    const detailResults = await Promise.all(
-      allSentEmails.map(e => pardotGet<ListEmailDetail>(creds, `list-emails/${e.id}?fields=id,recipientLists.id`))
-    )
+    const statsResults = await Promise.all(nsEmails.map(e => pardotStats(creds, e.id!)))
 
-    const nurtureIndices = allSentEmails.reduce<number[]>((acc, _e, i) => {
-      const detail = detailResults[i]
-      if (!detail) return acc
-      const lists: Array<{ id?: number }> = Array.isArray(detail.recipientLists)
-        ? detail.recipientLists
-        : (detail.recipientLists as { values?: Array<{ id?: number }> })?.values ?? []
-      if (lists.some(l => l.id != null && NURTURE_LIST_IDS.has(l.id))) acc.push(i)
-      return acc
-    }, [])
-
-    const sentEmails = nurtureIndices.length > 0
-      ? nurtureIndices.map(i => allSentEmails[i])
-      : allSentEmails
-
-    const statsResults = await Promise.all(sentEmails.map(e => pardotStats(creds, e.id!)))
-
-    const sequences = sentEmails
+    const sequences = nsEmails
       .map((e, i) => {
         const s = statsResults[i]
         if (!s) return null
         const sent = s.sent ?? 0
         if (sent < 10) return null
+        const segmentCode = extractSegmentCode(e.name ?? '') ?? ''
         const delivered = s.delivered ?? 0
         const opens = s.uniqueOpens ?? 0
         const clicks = s.uniqueClicks ?? 0
@@ -111,13 +110,18 @@ async function getSequencesData() {
         const bounceRate = pct(bounces, sent)
         const unsubRate = pct(unsubs, delivered)
         return {
-          id: e.id, name: e.subject ?? e.name ?? `Email ${e.id}`,
-          segmentLabel: parseSegmentLabel(e.name ?? ''),
-          segment: 'All Prospects', status: 'active',
+          id: e.id,
+          name: e.name ?? `Email ${e.id}`,
+          subject: e.subject ?? '',
+          segmentCode,
+          segment: SEGMENT_NAME_MAP[segmentCode] ?? segmentCode,
+          emailNumber: extractEmailNumber(e.name ?? ''),
+          status: 'active',
           sent, delivered, opens, clicks, bounces, unsubs, spam,
           deliveryRate, openRate, clickRate, ctr, bounceRate, unsubRate,
           mqlRate: 0, sqlRate: 0, wonRevenue: 0,
-          signal: signal(openRate, bounceRate), sentAt: e.sentAt,
+          signal: signal(openRate, bounceRate),
+          sentAt: e.sentAt,
         }
       })
       .filter((s): s is NonNullable<typeof s> => s !== null)
@@ -127,7 +131,7 @@ async function getSequencesData() {
       .sort((a, b) => b.opens - a.opens)
       .slice(0, 20)
       .map(s => ({
-        subject: s.name, delivered: s.delivered, opens: s.opens,
+        subject: s.subject || s.name, delivered: s.delivered, opens: s.opens,
         openRate: s.openRate, clicks: s.clicks, clickRate: s.clickRate,
         unsubs: s.unsubs, bounces: s.bounces,
       }))

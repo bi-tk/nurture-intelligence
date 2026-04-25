@@ -68,10 +68,11 @@ check() {
   value=$(jval "$json" "$path")
 
   case "$expected" in
-    ">0")   node -e "process.exit(parseFloat('$value')>0?0:1)" 2>/dev/null && status="PASS" || status="FAIL" ;;
-    ">100") node -e "process.exit(parseFloat('$value')>100?0:1)" 2>/dev/null && status="PASS" || status="FAIL" ;;
-    ">500") node -e "process.exit(parseFloat('$value')>500?0:1)" 2>/dev/null && status="PASS" || status="FAIL" ;;
-    *)      [[ "$value" == "$expected" ]] && status="PASS" || status="FAIL" ;;
+    ">0")      node -e "process.exit(parseFloat('$value')>0?0:1)" 2>/dev/null && status="PASS" || status="FAIL" ;;
+    ">100")    node -e "process.exit(parseFloat('$value')>100?0:1)" 2>/dev/null && status="PASS" || status="FAIL" ;;
+    ">500")    node -e "process.exit(parseFloat('$value')>500?0:1)" 2>/dev/null && status="PASS" || status="FAIL" ;;
+    "notempty") [[ -n "$value" && "$value" != "null" && "$value" != "" ]] && status="PASS" || status="FAIL" ;;
+    *)          [[ "$value" == "$expected" ]] && status="PASS" || status="FAIL" ;;
   esac
 
   if [[ "$status" == "PASS" ]]; then
@@ -151,13 +152,14 @@ check "Contacts"  "$CONTACTS"  "prospects.length"       ">0"
 
 check "Sequences" "$SEQUENCES" "connected"              "true"
 check "Sequences" "$SEQUENCES" "sequences.length"       ">0"
+check "Sequences" "$SEQUENCES" "sequences.0.segmentCode" "notempty"
 check "Sequences" "$SEQUENCES" "subjectLines.length"    ">0"
 check "Sequences" "$SEQUENCES" "prospectTitles.length"  ">0"
 
 check "Segments"  "$SEGMENTS"  "pardotConnected"        "true"
 check "Segments"  "$SEGMENTS"  "segments.length"        "7"
 check "Segments"  "$SEGMENTS"  "segments.0.members"     ">0"
-check "Segments"  "$SEGMENTS"  "segments.0.members"     ">100"
+check "Segments"  "$SEGMENTS"  "segments.0.sent"        ">0"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

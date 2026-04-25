@@ -7,6 +7,7 @@ export interface ProspectRow {
   id: number
   name: string
   title: string
+  normalizedTitle: string
   score: number
   grade: string
   status: string
@@ -36,6 +37,7 @@ function StatusBadge({ status }: { status: string }) {
 const columns: Column[] = [
   { key: 'id', label: '#', format: (v) => <span className="text-white/40 font-mono text-xs">{String(v ?? '')}</span> },
   { key: 'name', label: 'Name', format: (v) => <span className="text-white/80 font-medium whitespace-nowrap">{String(v ?? '')}</span> },
+  { key: 'normalizedTitle', label: 'Normalized Title', format: (v) => <span className="text-white/50 whitespace-nowrap text-xs">{String(v ?? '—')}</span> },
   { key: 'title', label: 'Title', format: (v) => <span className="text-white/50 whitespace-nowrap">{String(v ?? '')}</span> },
   { key: 'segment', label: 'Segment', format: (v) => <span className="text-white/50 whitespace-nowrap text-xs">{String(v ?? '—')}</span> },
   { key: 'nurtureStep', label: 'Nurture Step', format: (v) => <span className="text-white/50 whitespace-nowrap text-xs">{String(v ?? '—')}</span> },

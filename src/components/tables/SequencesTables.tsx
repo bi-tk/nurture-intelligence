@@ -6,8 +6,10 @@ import { formatNumber, formatPercent, formatCurrency, cn } from '@/lib/utils'
 export interface SequenceRow {
   id?: number
   name: string
-  segmentLabel: string
+  subject: string
+  segmentCode: string
   segment: string
+  emailNumber: string
   status: string
   sent: number
   delivered: number
@@ -50,6 +52,13 @@ export interface ProspectTitleRow {
   bounces: number
 }
 
+function formatSequenceName(name: string, emailNumber: string, segment: string): string {
+  if (!name.startsWith('NS | ')) return name
+  const segShort = segment.split(' | ')[0]
+  const emailNum = emailNumber ? emailNumber.replace(/^E(\d+)$/, 'Email $1') : ''
+  return emailNum ? `${segShort} · ${emailNum}` : segShort
+}
+
 function MetricCell({ value, warn, bad, invert }: { value: number; warn: number; bad: number; invert: boolean }) {
   const isGood = invert ? value < warn : value >= warn
   const isBad = invert ? value >= bad : value < bad
@@ -85,8 +94,16 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 const sequenceColumns: Column[] = [
-  { key: 'name', label: 'Sequence', format: (v) => <p className="truncate max-w-[200px] text-white font-medium whitespace-nowrap">{String(v ?? '')}</p> },
-  { key: 'segmentLabel', label: 'NS Segment', format: (v) => <span className="text-white/50 whitespace-nowrap text-xs">{v ? String(v) : '—'}</span> },
+  {
+    key: 'name',
+    label: 'Sequence',
+    format: (v, row) => (
+      <p className="truncate max-w-[200px] text-white font-medium whitespace-nowrap">
+        {formatSequenceName(String(v ?? ''), String(row?.emailNumber ?? ''), String(row?.segment ?? ''))}
+      </p>
+    ),
+  },
+  { key: 'segment', label: 'NS Segment', format: (v) => <span className="text-white/50 whitespace-nowrap text-xs">{v ? String(v) : '—'}</span> },
   { key: 'status', label: 'Status', format: (v) => <StatusBadge status={String(v ?? '')} /> },
   { key: 'sent', label: 'Sent', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },
   { key: 'delivered', label: 'Delivered', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },

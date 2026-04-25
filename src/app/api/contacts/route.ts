@@ -8,6 +8,7 @@ interface SfLead {
   Email?: string
   Pardot_Segments__c?: string
   Pardot_Nurture_Step__c?: string
+  Normalize_Title_del__c?: string
 }
 
 interface Prospect {
@@ -77,15 +78,16 @@ export async function GET() {
   ])
 
   const sfLeadsResult = sfCreds
-    ? await sfQuery<SfLead>(sfCreds, 'SELECT Email, Pardot_Segments__c, Pardot_Nurture_Step__c FROM Lead WHERE OQL__c = true LIMIT 1000')
+    ? await sfQuery<SfLead>(sfCreds, 'SELECT Email, Pardot_Segments__c, Pardot_Nurture_Step__c, Normalize_Title_del__c FROM Lead WHERE OQL__c = true LIMIT 1000')
     : null
 
-  const segmentMap = new Map<string, { segment: string; nurtureStep: string }>()
+  const segmentMap = new Map<string, { segment: string; nurtureStep: string; normalizedTitle: string }>()
   for (const lead of sfLeadsResult?.records ?? []) {
     if (lead.Email) {
       segmentMap.set(lead.Email.toLowerCase(), {
         segment: lead.Pardot_Segments__c ?? '—',
         nurtureStep: lead.Pardot_Nurture_Step__c ?? '—',
+        normalizedTitle: lead.Normalize_Title_del__c ?? '—',
       })
     }
   }
@@ -118,6 +120,7 @@ export async function GET() {
         lastActivity: p.lastActivityAt ?? null,
         segment: sfInfo?.segment ?? '—',
         nurtureStep: sfInfo?.nurtureStep ?? '—',
+        normalizedTitle: sfInfo?.normalizedTitle ?? '—',
       }
     })
 

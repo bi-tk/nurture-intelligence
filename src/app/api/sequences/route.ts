@@ -2,24 +2,39 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPardotCreds, pardotGet, pardotStats, pct } from '@/lib/sf-api'
 import { prisma } from '@/lib/prisma'
 
-const NURTURE_LIST_IDS = new Set([338651, 338939, 412789, 412798, 412807, 412810, 509437])
-
-const SEGMENT_CODE_MAP: Record<string, string> = {
-  CIO_NT_MM: 'CIOs Non-Tech Mid-Market',
-  CIO_NT_U50: 'CIOs Non-Tech Under $50M',
-  CEO_T_U50: 'CEOs Tech Under $50M',
-  CTO_T_U50: 'CTOs Tech Under $50M',
-  CEO_NT: 'CEOs Non-Tech',
-  CTO_FTS: 'CTOs Funded Tech Startups',
-  PE_MP: 'Private Equity Managing Partners',
+const SEGMENT_CODE_TO_LIST_ID: Record<string, number> = {
+  CIO_NT_MM: 338651,
+  CEO_NT: 338939,
+  CEO_T_U50: 412789,
+  CTO_T_U50: 412798,
+  CTO_FTS: 412807,
+  PE_MP: 412810,
+  CIO_NT_U50: 509437,
 }
 
-// Check longer/more-specific codes first to avoid substring false-matches
-const SEGMENT_CODE_ORDER = ['CIO_NT_MM', 'CIO_NT_U50', 'CEO_T_U50', 'CTO_T_U50', 'CEO_NT', 'CTO_FTS', 'PE_MP']
+const SEGMENT_NAME_MAP: Record<string, string> = {
+  CIO_NT_MM: 'CIOs & Tech Leaders | Non-Tech | $50–$500M',
+  CEO_NT: 'CEOs & Non-Tech Leaders | Non-Tech',
+  CEO_T_U50: 'CEOs & Non-Tech Leaders | Tech | Under $50M',
+  CTO_T_U50: 'CTOs & Tech Leaders | Tech | Under $50M',
+  CTO_FTS: 'CTOs & Tech Leaders | Funded Tech Startups',
+  PE_MP: 'Managing Partners | Private Equity',
+  CIO_NT_U50: 'CIOs & Tech Leaders | Non-Tech | Under $50M new',
+}
 
-function parseSegmentLabel(name: string): string {
-  for (const code of SEGMENT_CODE_ORDER) {
-    if (name.includes(code)) return SEGMENT_CODE_MAP[code]
+function extractSegmentCode(name: string): string | null {
+  const parts = name.split(' | ')
+  if (parts.length >= 2 && parts[0].trim() === 'NS') {
+    const code = parts[1].trim()
+    if (SEGMENT_CODE_TO_LIST_ID[code] !== undefined) return code
+  }
+  return null
+}
+
+function extractEmailNumber(name: string): string {
+  for (const part of name.split(' | ')) {
+    const m = part.trim().match(/^(E\d+)/)
+    if (m) return m[1]
   }
   return ''
 }
@@ -30,11 +45,6 @@ interface ListEmail {
   subject?: string
   sentAt?: string
   isSent?: boolean
-}
-
-interface ListEmailDetail {
-  id?: number
-  recipientLists?: Array<{ id?: number }> | { values?: Array<{ id?: number }> }
 }
 
 interface PardotProspect {
@@ -60,7 +70,7 @@ async function getSignalThresholds() {
   }
 }
 
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   const [pardotCreds, thresholds] = await Promise.all([
     getPardotCreds(),
     getSignalThresholds(),
@@ -78,53 +88,32 @@ export async function GET(req: NextRequest) {
     return 'At Risk'
   }
 
-  // Fetch sent emails and prospect titles in parallel
   const [listEmailsData, prospectData] = await Promise.all([
     pardotGet<{ values?: ListEmail[] }>(pardotCreds, 'list-emails?fields=id,name,subject,sentAt,isSent&limit=200'),
     pardotGet<{ values?: PardotProspect[] }>(pardotCreds, 'prospects?fields=id,jobTitle,score&limit=1000'),
   ])
 
-  const allSentEmails = (listEmailsData?.values ?? [])
+  // Filter to NS emails matching "NS | SEGMENT_CODE | TOPIC | E{NUM}"
+  const nsEmails = (listEmailsData?.values ?? [])
     .filter(e => {
       if (e.isSent !== true || e.id == null) return false
-      const n = (e.name ?? '').toLowerCase()
-      return !n.includes('copy') && !n.includes('test') && !n.includes('testing')
+      const n = e.name ?? ''
+      const nLower = n.toLowerCase()
+      if (nLower.includes('copy') || nLower.includes(' test') || nLower.includes('testing')) return false
+      return extractSegmentCode(n) !== null
     })
     .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
-    .slice(0, 50)
+    .slice(0, 100)
 
-  // Fetch individual email details to determine recipientLists
-  const detailResults = await Promise.all(
-    allSentEmails.map(e =>
-      pardotGet<ListEmailDetail>(pardotCreds, `list-emails/${e.id}?fields=id,recipientLists.id`)
-    )
-  )
+  const statsResults = await Promise.all(nsEmails.map(e => pardotStats(pardotCreds, e.id!)))
 
-  // Find emails sent to any nurture list; fall back to all if none match
-  const nurtureIndices = allSentEmails.reduce<number[]>((acc, _e, i) => {
-    const detail = detailResults[i]
-    if (!detail) return acc
-    const lists: Array<{ id?: number }> = Array.isArray(detail.recipientLists)
-      ? detail.recipientLists
-      : (detail.recipientLists as { values?: Array<{ id?: number }> })?.values ?? []
-    if (lists.some(l => l.id != null && NURTURE_LIST_IDS.has(l.id))) acc.push(i)
-    return acc
-  }, [])
-
-  const sentEmails = nurtureIndices.length > 0
-    ? nurtureIndices.map(i => allSentEmails[i])
-    : allSentEmails
-
-  const statsResults = await Promise.all(
-    sentEmails.map(e => pardotStats(pardotCreds, e.id!))
-  )
-
-  const sequences = sentEmails
+  const sequences = nsEmails
     .map((e, i) => {
       const s = statsResults[i]
       if (!s) return null
       const sent = s.sent ?? 0
       if (sent < 10) return null
+      const segmentCode = extractSegmentCode(e.name ?? '') ?? ''
       const delivered = s.delivered ?? 0
       const opens = s.uniqueOpens ?? 0
       const clicks = s.uniqueClicks ?? 0
@@ -139,9 +128,11 @@ export async function GET(req: NextRequest) {
       const unsubRate = pct(unsubs, delivered)
       return {
         id: e.id,
-        name: e.subject ?? e.name ?? `Email ${e.id}`,
-        segmentLabel: parseSegmentLabel(e.name ?? ''),
-        segment: 'All Prospects',
+        name: e.name ?? `Email ${e.id}`,
+        subject: e.subject ?? '',
+        segmentCode,
+        segment: SEGMENT_NAME_MAP[segmentCode] ?? segmentCode,
+        emailNumber: extractEmailNumber(e.name ?? ''),
         status: 'active',
         sent, delivered, opens, clicks, bounces, unsubs, spam,
         deliveryRate, openRate, clickRate, ctr, bounceRate, unsubRate,
@@ -157,12 +148,12 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => b.opens - a.opens)
     .slice(0, 20)
     .map(s => ({
-      subject: s.name, delivered: s.delivered, opens: s.opens,
+      subject: s.subject || s.name,
+      delivered: s.delivered, opens: s.opens,
       openRate: s.openRate, clicks: s.clicks, clickRate: s.clickRate,
       unsubs: s.unsubs, bounces: s.bounces,
     }))
 
-  // Prospect title performance — Pardot prospects grouped by jobTitle
   const prospects = prospectData?.values ?? []
   const titleMap: Record<string, { delivered: number; opens: number; clicks: number }> = {}
   for (const p of prospects) {
