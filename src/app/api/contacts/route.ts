@@ -78,7 +78,7 @@ export async function GET() {
   ])
 
   const sfLeadsResult = sfCreds
-    ? await sfQuery<SfLead>(sfCreds, 'SELECT Email, Pardot_Segments__c, Pardot_Nurture_Step__c, Normalize_Title_del__c FROM Lead WHERE OQL__c = true LIMIT 1000')
+    ? await sfQuery<SfLead>(sfCreds, 'SELECT Email, Pardot_Segments__c, Pardot_Nurture_Step__c, Normalize_Title_del__c FROM Lead WHERE MQL_Response__c = true OR SQL__c = true LIMIT 1000')
     : null
 
   const segmentMap = new Map<string, { segment: string; nurtureStep: string; normalizedTitle: string }>()

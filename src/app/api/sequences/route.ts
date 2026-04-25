@@ -111,8 +111,8 @@ export async function GET(_req: NextRequest) {
   const allSentEmails = (listEmailsData?.values ?? [])
     .filter(e => {
       if (e.isSent !== true || e.id == null) return false
-      const n = (e.name ?? '').toLowerCase()
-      return !n.includes('copy') && !n.includes(' test') && !n.includes('testing')
+      const n = e.name ?? ''
+      return n.startsWith('NS |')
     })
     .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
     .slice(0, 50)

@@ -17,7 +17,7 @@ export async function GET() {
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true') : Promise.resolve(0),
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true') : Promise.resolve(0),
       sfCreds ? sfQuery<OppRecord>(sfCreds, 'SELECT StageName, Amount FROM Opportunity WHERE IsClosed = false AND Amount != null') : Promise.resolve(null),
-      sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true') : Promise.resolve(null),
+      sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true AND Amount < 10000000') : Promise.resolve(null),
       sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsClosed = false') : Promise.resolve(null),
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE CreatedDate = THIS_MONTH') : Promise.resolve(0),
     ])
