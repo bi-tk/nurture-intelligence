@@ -1,90 +1,93 @@
 import { NextResponse } from 'next/server'
-import { getSfCreds, getPardotCreds, sfQuery, sfCount, pardotGet, pardotStats, pct, getNurtureAudienceCount } from '@/lib/sf-api'
+import {
+  bqQuery, bqCount, bqSum, t, pct, isConfigured,
+  EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
+  EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR, EMAIL_SPAM_EXPR,
+  IS_EMAIL_OPEN, IS_EMAIL_CLICK,
+} from '@/lib/bigquery'
 
-interface OppRecord { Amount: number; StageName: string }
-interface AggRecord { expr0: number }
-interface ListEmail { id?: number; name?: string; sentAt?: string; isSent?: boolean }
-interface ListEmailsResponse { values?: ListEmail[] }
+interface OppRow { StageName: string; Amount: number }
+interface EmailStatsRow {
+  sent: bigint | number
+  opens: bigint | number
+  unique_opens: bigint | number
+  clicks: bigint | number
+  unique_clicks: bigint | number
+  bounces: bigint | number
+  unsubs: bigint | number
+  spam: bigint | number
+}
+
+const ZERO = {
+  period: 'All Time',
+  nurtureCount: 0, mqls: 0, sqls: 0, discoveryCalls: 0,
+  opportunities: 0, wonOpportunities: 0,
+  wonRevenue: 0, pipelineValue: 0, opportunitiesCreated: 0,
+  emailsSent: 0, deliveryRate: 0, uniqueOpenRate: 0, uniqueClickRate: 0,
+  bounceRate: 0, unsubscribeRate: 0, spamRate: 0,
+  opensCount: 0, clicksCount: 0, unsubscribesCount: 0, bouncesCount: 0, spamCount: 0,
+  totalAudience: 0, engagedAudience: 0, engagedRate: 0,
+  prospectsOpenedAny: 0, prospectsClickedAny: 0, prospectsNoEngagement: 0,
+  sfConnected: false, pardotConnected: false,
+}
 
 export async function GET() {
-  const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
+  if (!isConfigured()) return NextResponse.json(ZERO)
 
-  // ── Salesforce queries — journey-based (same prospect tracked through each stage) ─
-  const [nurtureCount, mqlCount, sqlCount, discoveryCount, oppResult, wonAgg, pipelineAgg, newOpps] =
+  const [nurtureCount, mqlCount, sqlCount, discoveryCount, oppRows, wonRevenue, pipelineValue, newOpps] =
     await Promise.all([
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true') : Promise.resolve(0),
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE MQL_Response__c = true') : Promise.resolve(0),
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true') : Promise.resolve(0),
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true') : Promise.resolve(0),
-      sfCreds ? sfQuery<OppRecord>(sfCreds, 'SELECT StageName, Amount FROM Opportunity WHERE IsClosed = false AND Amount != null') : Promise.resolve(null),
-      sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true AND Amount < 10000000') : Promise.resolve(null),
-      sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsClosed = false') : Promise.resolve(null),
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE CreatedDate = THIS_MONTH') : Promise.resolve(0),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Marketing_nurture__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE`),
+      bqQuery<OppRow>(`SELECT StageName, Amount FROM ${t('Opportunities')} WHERE IsClosed = FALSE AND Amount IS NOT NULL`),
+      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Opportunities')} WHERE IsWon = TRUE AND IsClosed = TRUE AND Amount < 10000000`),
+      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE FORMAT_DATE('%Y-%m', DATE(CreatedDate)) = FORMAT_DATE('%Y-%m', CURRENT_DATE())`),
     ])
 
-  const wonRevenue = wonAgg?.records?.[0]?.expr0 ?? 0
-  const pipelineValue = pipelineAgg?.records?.[0]?.expr0 ?? 0
-  const wonOpportunities = (oppResult?.records ?? []).filter(r => r.StageName === 'Closed Won').length
-  const opportunities = oppResult?.totalSize ?? 0
+  const wonOpportunities = oppRows.filter(r => r.StageName === 'Closed Won').length
+  const opportunities = oppRows.length
 
-  // ── Pardot email aggregate (list-emails + per-email stats) ─────────────────
-  let totalSent = 0, totalDelivered = 0, totalUniqueOpens = 0, totalUniqueClicks = 0
-  let totalHardBounces = 0, totalSoftBounces = 0, totalUnsubs = 0, totalSpam = 0
+  const [emailRows, totalAudience, engagedCount] = await Promise.all([
+    bqQuery<EmailStatsRow>(`
+      SELECT
+        ${EMAIL_SENT_EXPR}   AS sent,
+        ${EMAIL_OPEN_EXPR}   AS opens,
+        COUNT(DISTINCT IF(${IS_EMAIL_OPEN},  prospect_id, NULL)) AS unique_opens,
+        ${EMAIL_CLICK_EXPR}  AS clicks,
+        COUNT(DISTINCT IF(${IS_EMAIL_CLICK}, prospect_id, NULL)) AS unique_clicks,
+        ${EMAIL_BOUNCE_EXPR} AS bounces,
+        ${EMAIL_UNSUB_EXPR}  AS unsubs,
+        ${EMAIL_SPAM_EXPR}   AS spam
+      FROM ${t('pardot_userActivities')}
+    `),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}`),
+    bqCount(`
+      SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}
+      WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+    `),
+  ])
 
-  if (pardotCreds) {
-    const listEmailsData = await pardotGet<ListEmailsResponse>(
-      pardotCreds,
-      'list-emails?fields=id,name,sentAt,isSent&limit=200'
-    )
-    const sentEmails = (listEmailsData?.values ?? [])
-      .filter(e => e.isSent === true && e.id != null)
-      .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
-      .slice(0, 50)
+  const es = emailRows[0]
+  const totalSent = Number(es?.sent ?? 0)
+  const totalUniqueOpens = Number(es?.unique_opens ?? 0)
+  const totalUniqueClicks = Number(es?.unique_clicks ?? 0)
+  const totalBounces = Number(es?.bounces ?? 0)
+  const totalUnsubs = Number(es?.unsubs ?? 0)
+  const totalSpam = Number(es?.spam ?? 0)
+  const totalDelivered = Math.max(0, totalSent - totalBounces)
 
-    const statsResults = await Promise.all(
-      sentEmails.map(e => pardotStats(pardotCreds, e.id!))
-    )
-
-    for (const s of statsResults) {
-      if (!s) continue
-      totalSent += s.sent ?? 0
-      totalDelivered += s.delivered ?? 0
-      totalUniqueOpens += s.uniqueOpens ?? 0
-      totalUniqueClicks += s.uniqueClicks ?? 0
-      totalHardBounces += s.hardBounced ?? 0
-      totalSoftBounces += s.softBounced ?? 0
-      totalUnsubs += s.optOuts ?? 0
-      totalSpam += s.spamComplaints ?? 0
-    }
-  }
-
-  const totalBounces = totalHardBounces + totalSoftBounces
-
-  const totalAudience = pardotCreds ? await getNurtureAudienceCount(pardotCreds) : 0
-  const prospectsOpenedAny = totalUniqueOpens
-  const prospectsClickedAny = totalUniqueClicks
-  const prospectsNoEngagement = Math.max(0, totalAudience - prospectsOpenedAny)
-  const engagedAudience = prospectsOpenedAny
-  const engagedRate = totalAudience > 0 ? parseFloat(((prospectsOpenedAny / totalAudience) * 100).toFixed(1)) : 0
+  const engagedAudience = engagedCount
+  const prospectsNoEngagement = Math.max(0, totalAudience - engagedAudience)
+  const engagedRate = pct(engagedAudience, totalAudience)
+  const prospectsClickedAny = Math.round(engagedAudience * pct(totalUniqueClicks, totalUniqueOpens) / 100)
 
   return NextResponse.json({
-    // period
-    period: 'Last 30 Days',
-
-    // Funnel
-    nurtureCount,
-    mqls: mqlCount,
-    sqls: sqlCount,
-    discoveryCalls: discoveryCount,
-    opportunities,
-    wonOpportunities,
-
-    // Revenue
-    wonRevenue,
-    pipelineValue,
-    opportunitiesCreated: newOpps,
-
-    // Email health
+    period: 'All Time',
+    nurtureCount, mqls: mqlCount, sqls: sqlCount, discoveryCalls: discoveryCount,
+    opportunities, wonOpportunities,
+    wonRevenue, pipelineValue, opportunitiesCreated: newOpps,
     emailsSent: totalSent,
     deliveryRate: pct(totalDelivered, totalSent),
     uniqueOpenRate: pct(totalUniqueOpens, totalDelivered),
@@ -92,24 +95,16 @@ export async function GET() {
     bounceRate: pct(totalBounces, totalSent),
     unsubscribeRate: pct(totalUnsubs, totalDelivered),
     spamRate: pct(totalSpam, totalDelivered),
-
-    // Raw counts
     opensCount: totalUniqueOpens,
     clicksCount: totalUniqueClicks,
     unsubscribesCount: totalUnsubs,
     bouncesCount: totalBounces,
     spamCount: totalSpam,
-
-    // Audience
-    totalAudience,
-    engagedAudience,
-    engagedRate,
-    prospectsOpenedAny,
+    totalAudience, engagedAudience, engagedRate,
+    prospectsOpenedAny: engagedAudience,
     prospectsClickedAny,
     prospectsNoEngagement,
-
-    // Connected status
-    sfConnected: !!sfCreds,
-    pardotConnected: !!pardotCreds,
+    sfConnected: true,
+    pardotConnected: true,
   })
 }

@@ -5,7 +5,12 @@ import FunnelChart from '@/components/charts/FunnelChart'
 import TrendChart from '@/components/charts/TrendChart'
 import DualTrendChart from '@/components/charts/DualTrendChart'
 import { formatNumber, formatCurrency, formatPercent } from '@/lib/utils'
-import { getSfCreds, getPardotCreds, sfQuery, sfCount, pardotGet, pardotStats, pct, getNurtureAudienceCount } from '@/lib/sf-api'
+import {
+  bqQuery, bqCount, bqSum, t, pct, isConfigured,
+  EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
+  EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR, EMAIL_SPAM_EXPR,
+  IS_EMAIL_OPEN, IS_EMAIL_CLICK,
+} from '@/lib/bigquery'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,72 +18,51 @@ const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'
 
 // ─── Fetch helpers ────────────────────────────────────────────────────────────
 
-type ListEmailMeta = { id?: number; subject?: string; name?: string; sentAt?: string; isSent?: boolean }
-
-async function fetchSentEmails(pardotCreds: Awaited<ReturnType<typeof getPardotCreds>>) {
-  if (!pardotCreds) return []
-  const data = await pardotGet<{ values?: ListEmailMeta[] }>(
-    pardotCreds,
-    'list-emails?fields=id,name,subject,sentAt,isSent&limit=200'
-  )
-  return (data?.values ?? [])
-    .filter(e => e.isSent === true && e.id != null)
-    .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
-    .slice(0, 50)
-}
-
 async function fetchKpis() {
   try {
-    const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
-    if (!sfCreds && !pardotCreds) return null
+    if (!isConfigured()) return null
 
-    const [mqlCount, sqlCount, discoveryCount, wonAgg, pipelineAgg, newOpps] = await Promise.all([
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE MQL_Response__c = true') : 0,
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true') : 0,
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true') : 0,
-      sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true AND Amount < 10000000') : null,
-      sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsClosed = false') : null,
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE CreatedDate = THIS_MONTH') : 0,
+    const [mqlCount, sqlCount, discoveryCount, wonRevenue, pipelineValue, newOpps] = await Promise.all([
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE`),
+      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Opportunities')} WHERE IsWon = TRUE AND IsClosed = TRUE AND Amount < 10000000`),
+      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE FORMAT_DATE('%Y-%m', DATE(CreatedDate)) = FORMAT_DATE('%Y-%m', CURRENT_DATE())`),
     ])
 
-    const wonRevenue = wonAgg?.records?.[0]?.expr0 ?? 0
-    const pipelineValue = pipelineAgg?.records?.[0]?.expr0 ?? 0
-
-    // Pardot email stats via list-emails/{id}/stats
-    let totalSent = 0, totalDelivered = 0, totalUniqueOpens = 0, totalUniqueClicks = 0
-    let totalHardBounces = 0, totalSoftBounces = 0, totalUnsubs = 0, totalSpam = 0
-
-    if (pardotCreds) {
-      const sentEmails = await fetchSentEmails(pardotCreds)
-      const statsResults = await Promise.all(sentEmails.map(e => pardotStats(pardotCreds, e.id!)))
-      for (const s of statsResults) {
-        if (!s) continue
-        totalSent += s.sent ?? 0
-        totalDelivered += s.delivered ?? 0
-        totalUniqueOpens += s.uniqueOpens ?? 0
-        totalUniqueClicks += s.uniqueClicks ?? 0
-        totalHardBounces += s.hardBounced ?? 0
-        totalSoftBounces += s.softBounced ?? 0
-        totalUnsubs += s.optOuts ?? 0
-        totalSpam += s.spamComplaints ?? 0
-      }
+    interface EmailRow {
+      sent: bigint | number; unique_opens: bigint | number; unique_clicks: bigint | number
+      bounces: bigint | number; unsubs: bigint | number; spam: bigint | number
     }
-
-    const totalBounces = totalHardBounces + totalSoftBounces
-
-    type ProspectRow = { lastActivityAt?: string }
-    const [prospects, totalAudience] = await Promise.all([
-      pardotCreds
-        ? pardotGet<{ values?: ProspectRow[] }>(pardotCreds, 'prospects?fields=id,lastActivityAt&limit=500')
-        : Promise.resolve(null),
-      pardotCreds ? getNurtureAudienceCount(pardotCreds) : Promise.resolve(0),
+    const [emailRows, totalAudience, engagedCount] = await Promise.all([
+      bqQuery<EmailRow>(`
+        SELECT
+          ${EMAIL_SENT_EXPR} AS sent,
+          COUNT(DISTINCT IF(${IS_EMAIL_OPEN},  prospect_id, NULL)) AS unique_opens,
+          COUNT(DISTINCT IF(${IS_EMAIL_CLICK}, prospect_id, NULL)) AS unique_clicks,
+          ${EMAIL_BOUNCE_EXPR} AS bounces,
+          ${EMAIL_UNSUB_EXPR}  AS unsubs,
+          ${EMAIL_SPAM_EXPR}   AS spam
+        FROM ${t('pardot_userActivities')}
+      `),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}`),
+      bqCount(`
+        SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}
+        WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+      `),
     ])
-    const prospectList = prospects?.values ?? []
-    const now = Date.now()
-    const thirtyDays = 30 * 24 * 60 * 60 * 1000
-    const prospectsOpenedAny = prospectList.filter(p =>
-      p.lastActivityAt && (now - new Date(p.lastActivityAt).getTime()) < thirtyDays
-    ).length
+
+    const es = emailRows[0]
+    const totalSent = Number(es?.sent ?? 0)
+    const totalUniqueOpens = Number(es?.unique_opens ?? 0)
+    const totalUniqueClicks = Number(es?.unique_clicks ?? 0)
+    const totalBounces = Number(es?.bounces ?? 0)
+    const totalUnsubs = Number(es?.unsubs ?? 0)
+    const totalSpam = Number(es?.spam ?? 0)
+    const totalDelivered = Math.max(0, totalSent - totalBounces)
+
+    const prospectsOpenedAny = engagedCount
     const prospectsNoEngagement = Math.max(0, totalAudience - prospectsOpenedAny)
 
     return {
@@ -109,24 +93,19 @@ async function fetchKpis() {
 
 async function fetchFunnelData() {
   try {
-    const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
-    if (!sfCreds) return null
-    const [totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps] = await Promise.all([
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE MQL_Response__c = true'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE IsClosed = false'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE IsWon = true AND IsClosed = true'),
+    if (!isConfigured()) return null
+    const [totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Marketing_nurture__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsWon = TRUE AND IsClosed = TRUE`),
+      bqCount(`
+        SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}
+        WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+      `),
     ])
-    type P = { lastActivityAt?: string }
-    const prospects = pardotCreds
-      ? await pardotGet<{ values?: P[] }>(pardotCreds, 'prospects?fields=id,lastActivityAt&limit=500')
-      : null
-    const now = Date.now(), thirtyDays = 30 * 24 * 60 * 60 * 1000
-    const engaged = (prospects?.values ?? []).filter(
-      p => p.lastActivityAt && (now - new Date(p.lastActivityAt).getTime()) < thirtyDays
-    ).length
     const base = totalLeads || 1
     const raw = [
       { stage: 'Added to Nurture', count: totalLeads },
@@ -141,127 +120,119 @@ async function fetchFunnelData() {
   } catch { return null }
 }
 
-async function fetchTopSequences() {
+interface CampaignTrendRow {
+  campaign_name: string
+  period_month: string
+  period_week: string
+  sent: bigint | number; opens: bigint | number; clicks: bigint | number
+  bounces: bigint | number; unsubs: bigint | number
+  min_created_at: string
+}
+
+async function fetchTrendAndSequences() {
   try {
-    const pardotCreds = await getPardotCreds()
-    if (!pardotCreds) return null
+    if (!isConfigured()) return null
 
-    const sentEmails = await fetchSentEmails(pardotCreds)
-    const statsResults = await Promise.all(sentEmails.map(e => pardotStats(pardotCreds, e.id!)))
+    const rows = await bqQuery<CampaignTrendRow>(`
+      SELECT
+        campaign_name,
+        FORMAT_DATETIME('%Y-%m', created_at) AS period_month,
+        FORMAT_DATETIME('%Y-%W', created_at) AS period_week,
+        ${EMAIL_SENT_EXPR}   AS sent,
+        ${EMAIL_OPEN_EXPR}   AS opens,
+        ${EMAIL_CLICK_EXPR}  AS clicks,
+        ${EMAIL_BOUNCE_EXPR} AS bounces,
+        ${EMAIL_UNSUB_EXPR}  AS unsubs,
+        MIN(CAST(created_at AS STRING)) AS min_created_at
+      FROM ${t('pardot_userActivities')}
+      WHERE campaign_name IS NOT NULL AND campaign_name != ''
+        AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')
+      GROUP BY campaign_name, period_month, period_week
+      HAVING ${EMAIL_SENT_EXPR} >= 5
+    `)
 
-    const sequences = sentEmails
-      .map((e, i) => {
-        const s = statsResults[i]
-        if (!s) return null
-        const delivered = s.delivered ?? 0
-        const opens = s.uniqueOpens ?? 0
-        const clicks = s.uniqueClicks ?? 0
-        return {
-          name: e.subject ?? e.name ?? `Email ${e.id}`,
-          openRate: pct(opens, delivered),
-          clickRate: pct(clicks, delivered),
-        }
-      })
-      .filter((s): s is NonNullable<typeof s> => s !== null)
+    // Trend aggregation per month and week
+    type PeriodBucket = { sortKey: string; label: string; sent: number; delivered: number; opens: number; clicks: number; bounces: number; unsubs: number }
+    const monthMap = new Map<string, PeriodBucket>()
+    const weekMap = new Map<string, PeriodBucket>()
+
+    // Campaign-level stats for sequences
+    const campaignMap = new Map<string, { name: string; sent: number; delivered: number; opens: number; clicks: number; sentAt: string }>()
+
+    for (const r of rows) {
+      const sent = Number(r.sent)
+      const opens = Number(r.opens)
+      const clicks = Number(r.clicks)
+      const bounces = Number(r.bounces)
+      const unsubs = Number(r.unsubs)
+      const delivered = Math.max(0, sent - bounces)
+
+      // Monthly
+      const mKey = String(r.period_month)
+      const mLabel = MONTH_NAMES[parseInt(mKey.split('-')[1] ?? '1') - 1] ?? mKey
+      if (!monthMap.has(mKey)) monthMap.set(mKey, { sortKey: mKey, label: mLabel, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
+      const m = monthMap.get(mKey)!
+      m.sent += sent; m.delivered += delivered; m.opens += opens; m.clicks += clicks; m.bounces += bounces; m.unsubs += unsubs
+
+      // Weekly
+      const wKey = String(r.period_week)
+      if (!weekMap.has(wKey)) weekMap.set(wKey, { sortKey: wKey, label: wKey, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
+      const w = weekMap.get(wKey)!
+      w.sent += sent; w.delivered += delivered; w.opens += opens; w.clicks += clicks; w.bounces += bounces; w.unsubs += unsubs
+
+      // Campaign totals
+      const cName = String(r.campaign_name)
+      if (!campaignMap.has(cName)) campaignMap.set(cName, { name: cName, sent: 0, delivered: 0, opens: 0, clicks: 0, sentAt: String(r.min_created_at) })
+      const c = campaignMap.get(cName)!
+      c.sent += sent; c.delivered += delivered; c.opens += opens; c.clicks += clicks
+    }
+
+    const sortedMonths = [...monthMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    const sortedWeeks = [...weekMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey)).slice(-12)
+
+    const monthlyData = sortedMonths.map(m => ({
+      month: m.label, opens: m.opens, clicks: m.clicks,
+      bounceRate: pct(m.bounces, m.sent), unsubRate: pct(m.unsubs, m.delivered), prospectsAdded: 0,
+    }))
+    const weeklyData = sortedWeeks.map(w => ({
+      week: w.label, opens: w.opens, clicks: w.clicks,
+      bounceRate: pct(w.bounces, w.sent), unsubRate: pct(w.unsubs, w.delivered), prospectsAdded: 0,
+    }))
+    const trendData = sortedMonths.map(m => ({
+      month: m.label, openRate: pct(m.opens, m.delivered), mqls: 0,
+    }))
+
+    const sequences = [...campaignMap.values()]
+      .filter(c => c.sent >= 10)
+      .map(c => ({
+        name: c.name,
+        openRate: pct(c.opens, c.delivered),
+        clickRate: pct(c.clicks, c.delivered),
+      }))
       .sort((a, b) => b.openRate - a.openRate)
 
-    const topSequences = sequences.slice(0, 3).map(s => ({
-      name: s.name, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0,
-    }))
-    const worstSequences = sequences.slice(-3).reverse().map(s => ({
-      name: s.name, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0,
-    }))
+    const topSequences = sequences.slice(0, 3).map(s => ({ name: s.name, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
+    const worstSequences = sequences.slice(-3).reverse().map(s => ({ name: s.name, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
 
-    return { topSequences, worstSequences }
+    return { monthlyData, weeklyData, trendData, topSequences, worstSequences }
   } catch { return null }
 }
 
 async function fetchSegments() {
   try {
-    const pardotCreds = await getPardotCreds()
-    if (!pardotCreds) return null
-    type L = { name?: string; title?: string; memberCount?: number }
-    const data = await pardotGet<{ values?: L[] }>(pardotCreds, 'lists?fields=id,name,title,memberCount&limit=50')
-    const lists = (data?.values ?? [])
-      .filter(l => (l.memberCount ?? 0) > 0)
-      .sort((a, b) => (b.memberCount ?? 0) - (a.memberCount ?? 0))
-    return lists.slice(0, 5).map(l => ({
-      name: l.name ?? l.title ?? 'List', openRate: 0, clickRate: 0, mqlRate: 0,
-    }))
-  } catch { return null }
-}
-
-type PeriodBucket = {
-  sortKey: string; label: string
-  sent: number; delivered: number; opens: number; clicks: number; bounces: number; unsubs: number
-}
-
-function getWeekMonday(d: Date): Date {
-  const day = d.getDay()
-  const diff = (day === 0 ? -6 : 1 - day)
-  const monday = new Date(d)
-  monday.setDate(d.getDate() + diff)
-  monday.setHours(0, 0, 0, 0)
-  return monday
-}
-
-async function fetchTrendData() {
-  try {
-    const pardotCreds = await getPardotCreds()
-    if (!pardotCreds) return null
-
-    const sentEmails = await fetchSentEmails(pardotCreds)
-    const statsResults = await Promise.all(sentEmails.map(e => pardotStats(pardotCreds, e.id!)))
-
-    const monthMap = new Map<string, PeriodBucket>()
-    const weekMap = new Map<string, PeriodBucket>()
-
-    sentEmails.forEach((e, i) => {
-      const s = statsResults[i]
-      if (!s || !e.sentAt) return
-      const d = new Date(e.sentAt)
-
-      // Monthly bucket
-      const mSortKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-      const mLabel = MONTH_NAMES[d.getMonth()]
-      if (!monthMap.has(mSortKey)) monthMap.set(mSortKey, { sortKey: mSortKey, label: mLabel, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
-      const m = monthMap.get(mSortKey)!
-      m.sent += s.sent ?? 0; m.delivered += s.delivered ?? 0
-      m.opens += s.uniqueOpens ?? 0; m.clicks += s.uniqueClicks ?? 0
-      m.bounces += (s.hardBounced ?? 0) + (s.softBounced ?? 0); m.unsubs += s.optOuts ?? 0
-
-      // Weekly bucket — keyed by Monday date, labelled "Mon D"
-      const monday = getWeekMonday(d)
-      const wSortKey = monday.toISOString().slice(0, 10)
-      const wLabel = `${MONTH_NAMES[monday.getMonth()]} ${monday.getDate()}`
-      if (!weekMap.has(wSortKey)) weekMap.set(wSortKey, { sortKey: wSortKey, label: wLabel, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
-      const w = weekMap.get(wSortKey)!
-      w.sent += s.sent ?? 0; w.delivered += s.delivered ?? 0
-      w.opens += s.uniqueOpens ?? 0; w.clicks += s.uniqueClicks ?? 0
-      w.bounces += (s.hardBounced ?? 0) + (s.softBounced ?? 0); w.unsubs += s.optOuts ?? 0
-    })
-
-    const sortedMonths = [...monthMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey))
-    const sortedWeeks = [...weekMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey)).slice(-12)
-
-    const toChartRow = (b: PeriodBucket, key: 'month' | 'week') => ({
-      [key]: b.label,
-      opens: b.opens, clicks: b.clicks,
-      bounceRate: pct(b.bounces, b.sent),
-      unsubRate: pct(b.unsubs, b.delivered),
-      prospectsAdded: 0,
-    })
-
-    const monthlyData = sortedMonths.map(m => toChartRow(m, 'month'))
-    const weeklyData = sortedWeeks.map(w => toChartRow(w, 'week'))
-
-    const trendData = sortedMonths.map(m => ({
-      month: m.label,
-      openRate: pct(m.opens, m.delivered),
-      mqls: 0,
-    }))
-
-    return { monthlyData, weeklyData, trendData }
+    if (!isConfigured()) return null
+    interface SegRow { pardot_segments: string; members: bigint | number }
+    const rows = await bqQuery<SegRow>(`
+      SELECT
+        TRIM(SPLIT(pardot_segments, ',')[OFFSET(0)]) AS pardot_segments,
+        COUNT(*) AS members
+      FROM ${t('pardot_prospects')}
+      WHERE pardot_segments IS NOT NULL AND pardot_segments != ''
+      GROUP BY pardot_segments
+      ORDER BY members DESC
+      LIMIT 5
+    `)
+    return rows.map(r => ({ name: String(r.pardot_segments), openRate: 0, clickRate: 0, mqlRate: 0 }))
   } catch { return null }
 }
 
@@ -270,33 +241,33 @@ async function fetchTrendData() {
 export default async function ExecutivePage() {
   const session = await auth()
 
-  const [liveKpi, liveFunnel, liveSeqData, liveSegments, liveTrend] = await Promise.all([
-    fetchKpis(), fetchFunnelData(), fetchTopSequences(), fetchSegments(), fetchTrendData(),
+  const [liveKpi, liveFunnel, liveTrendSeq, liveSegments] = await Promise.all([
+    fetchKpis(), fetchFunnelData(), fetchTrendAndSequences(), fetchSegments(),
   ])
 
   const zeroKpi = {
     wonRevenue: 0, pipelineValue: 0, wonOpportunities: 0, opportunitiesCreated: 0,
     mqls: 0, sqls: 0, discoveryCalls: 0, engagedAudience: 0, engagedRate: 0,
     totalAudience: 0, emailsSent: 0, deliveryRate: 0, uniqueOpenRate: 0,
-    uniqueClickRate: 0, bounceRate: 0, unsubscribeRate: 0,
+    uniqueClickRate: 0, bounceRate: 0, unsubscribeRate: 0, spamRate: 0,
     opensCount: 0, clicksCount: 0, unsubscribesCount: 0, bouncesCount: 0, spamCount: 0,
     prospectsOpenedAny: 0, prospectsClickedAny: 0, prospectsNoEngagement: 0,
   }
   const kpi = liveKpi ?? zeroKpi
   const funnelData = liveFunnel ?? []
-  const topSequences = liveSeqData?.topSequences ?? []
-  const worstSequences = liveSeqData?.worstSequences ?? []
+  const topSequences = liveTrendSeq?.topSequences ?? []
+  const worstSequences = liveTrendSeq?.worstSequences ?? []
   const topSegments = liveSegments ?? []
-  const monthlyTrend = liveTrend?.monthlyData ?? []
-  const weeklyTrend = liveTrend?.weeklyData ?? []
-  const trendChartData = liveTrend?.trendData ?? []
+  const monthlyTrend = liveTrendSeq?.monthlyData ?? []
+  const weeklyTrend = liveTrendSeq?.weeklyData ?? []
+  const trendChartData = liveTrendSeq?.trendData ?? []
   const isLive = !!liveKpi
 
   return (
     <div className="flex flex-col min-h-full">
       <Header
         title="Executive Overview"
-        subtitle={isLive ? 'Live Salesforce + Pardot Data' : 'Connect Salesforce & Pardot to see live data'}
+        subtitle={isLive ? 'Live BigQuery Data' : 'Configure BQ_PROJECT_ID & BQ_DATASET_ID to see live data'}
         userName={session?.user?.name}
         userRole={session?.user?.role!}
       />
@@ -307,7 +278,7 @@ export default async function ExecutivePage() {
         {!isLive && (
           <div className="bg-yellow-500/8 border border-yellow-500/15 rounded-xl px-5 py-3 flex items-center gap-3">
             <svg className="w-4 h-4 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
-            <p className="text-yellow-400/80 text-sm">No live data — <a href="/admin/integrations" className="underline">connect Salesforce &amp; Pardot</a> to see real numbers.</p>
+            <p className="text-yellow-400/80 text-sm">No live data — set <code>BQ_PROJECT_ID</code> and <code>BQ_DATASET_ID</code> environment variables.</p>
           </div>
         )}
 
@@ -321,7 +292,7 @@ export default async function ExecutivePage() {
             <p className="text-white/70 text-sm leading-relaxed">
               {isLive
                 ? `Pipeline: ${formatCurrency(kpi.pipelineValue)} · ${formatNumber(kpi.emailsSent)} emails sent · ${kpi.uniqueOpenRate}% open rate · ${kpi.engagedAudience.toLocaleString()} engaged prospects.`
-                : 'Connect Salesforce & Pardot to generate AI executive summaries.'}
+                : 'Configure BigQuery to generate AI executive summaries.'}
             </p>
           </div>
         </div>
@@ -434,7 +405,7 @@ export default async function ExecutivePage() {
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
             <p className="text-accent-green text-xs font-mono uppercase tracking-widest mb-4">Top Performing Sequences</p>
             {topSequences.length === 0 ? (
-              <p className="text-white/30 text-sm">No sequence data — connect Pardot to see performance.</p>
+              <p className="text-white/30 text-sm">No sequence data available.</p>
             ) : (
               <div className="space-y-3">
                 {topSequences.map((s) => (
@@ -452,7 +423,7 @@ export default async function ExecutivePage() {
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
             <p className="text-accent-red text-xs font-mono uppercase tracking-widest mb-4">Underperforming Sequences</p>
             {worstSequences.length === 0 ? (
-              <p className="text-white/30 text-sm">No sequence data — connect Pardot to see performance.</p>
+              <p className="text-white/30 text-sm">No sequence data available.</p>
             ) : (
               <div className="space-y-3">
                 {worstSequences.map((s) => (
@@ -472,9 +443,9 @@ export default async function ExecutivePage() {
         {/* Top Segments */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
-            <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-4">Top Segments {isLive ? '(Pardot Lists)' : ''}</p>
+            <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-4">Top Segments</p>
             {topSegments.length === 0 ? (
-              <p className="text-white/30 text-sm">No segment data — connect Pardot to see lists.</p>
+              <p className="text-white/30 text-sm">No segment data available.</p>
             ) : (
               <table className="w-full text-sm">
                 <thead>
@@ -500,7 +471,7 @@ export default async function ExecutivePage() {
           </div>
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
             <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-4">Top Industries by MQLs</p>
-            <p className="text-white/30 text-sm">Connect Salesforce to see industry breakdown.</p>
+            <p className="text-white/30 text-sm">Industry breakdown available on the Segments page.</p>
           </div>
         </div>
 

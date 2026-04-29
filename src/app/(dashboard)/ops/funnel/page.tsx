@@ -3,35 +3,29 @@ import Header from '@/components/layout/Header'
 import FunnelChart from '@/components/charts/FunnelChart'
 import KpiCard from '@/components/ui/KpiCard'
 import { formatPercent } from '@/lib/utils'
-import { getSfCreds, getPardotCreds, sfCount, pardotGet } from '@/lib/sf-api'
+import { bqCount, t, isConfigured } from '@/lib/bigquery'
 
 export const dynamic = 'force-dynamic'
 
 async function fetchFunnelData() {
   try {
-    const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
-    if (!sfCreds) return null
-    const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps] = await Promise.all([
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE OQL__c = true'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE MQL_Response__c = true'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE IsClosed = false'),
-      sfCount(sfCreds, "SELECT COUNT() FROM Opportunity WHERE StageName = 'Closed Won'"),
+    if (!isConfigured()) return null
+    const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE OQL__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE StageName = 'Closed Won'`),
+      bqCount(`
+        SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}
+        WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+      `),
     ])
-    const totalLeads = nurtureTotal
-    type P = { lastActivityAt?: string }
-    const prospects = pardotCreds
-      ? await pardotGet<{ values?: P[] }>(pardotCreds, 'prospects?fields=id,lastActivityAt&limit=500')
-      : null
-    const now = Date.now(), thirtyDays = 30 * 24 * 60 * 60 * 1000
-    const engaged = (prospects?.values ?? []).filter(
-      p => p.lastActivityAt && now - new Date(p.lastActivityAt).getTime() < thirtyDays
-    ).length
-    const base = totalLeads || 1
+    const base = nurtureTotal || 1
     const raw = [
-      { stage: 'Added to Nurture', count: totalLeads },
-      { stage: 'Engaged', count: engaged || Math.round(totalLeads * 0.38) },
+      { stage: 'Added to Nurture', count: nurtureTotal },
+      { stage: 'Engaged', count: engaged || Math.round(nurtureTotal * 0.38) },
       { stage: 'MQL', count: mqls },
       { stage: 'SQL', count: sqls },
       { stage: 'Discovery Call', count: discoveryCalls },
@@ -69,7 +63,7 @@ export default async function FunnelPage() {
     <div className="flex flex-col min-h-full">
       <Header
         title="Funnel Analysis"
-        subtitle={isLive ? 'Live Salesforce Data' : 'Stage-by-stage conversion from nurture entry to won revenue'}
+        subtitle={isLive ? 'Live BigQuery Data' : 'Stage-by-stage conversion from nurture entry to won revenue'}
         userName={session?.user?.name}
         userRole={session?.user?.role!}
       />
@@ -78,7 +72,7 @@ export default async function FunnelPage() {
         {!isLive && (
           <div className="bg-yellow-500/8 border border-yellow-500/15 rounded-xl px-5 py-3 flex items-center gap-3">
             <svg className="w-4 h-4 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
-            <p className="text-yellow-400/80 text-sm">No data — <a href="/admin/integrations" className="underline">connect Salesforce to see live funnel counts</a>.</p>
+            <p className="text-yellow-400/80 text-sm">No data — configure <code>BQ_PROJECT_ID</code> and <code>BQ_DATASET_ID</code> to see live funnel counts.</p>
           </div>
         )}
 

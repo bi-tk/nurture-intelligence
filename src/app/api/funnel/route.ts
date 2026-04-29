@@ -1,44 +1,32 @@
 import { NextResponse } from 'next/server'
-import { getSfCreds, getPardotCreds, sfCount, pardotGet } from '@/lib/sf-api'
-
-interface PardotProspectList {
-  values?: Array<{ score?: number; lastActivityAt?: string }>
-}
+import { bqCount, t, isConfigured } from '@/lib/bigquery'
 
 export async function GET() {
-  const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
+  if (!isConfigured()) {
+    return NextResponse.json({
+      stages: [], nurtureTotal: 0, mqls: 0, sqls: 0,
+      discoveryCalls: 0, opps: 0, wonOpps: 0,
+      sfConnected: false, pardotConnected: false,
+    })
+  }
 
-  const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps] = await Promise.all([
-    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE OQL__c = true') : Promise.resolve(0),
-    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE MQL_Response__c = true') : Promise.resolve(0),
-    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true') : Promise.resolve(0),
-    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true') : Promise.resolve(0),
-    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE IsClosed = false') : Promise.resolve(0),
-    sfCreds ? sfCount(sfCreds, "SELECT COUNT() FROM Opportunity WHERE StageName = 'Closed Won'") : Promise.resolve(0),
+  const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE OQL__c = TRUE`),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE`),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE`),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE`),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE StageName = 'Closed Won'`),
+    bqCount(`
+      SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}
+      WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+    `),
   ])
-  const totalLeads = nurtureTotal
 
-  // Engaged = prospects active in last 30 days (from Pardot)
-  const prospects = pardotCreds
-    ? await pardotGet<PardotProspectList>(
-        pardotCreds,
-        'prospects?fields=id,score,lastActivityAt&limit=500'
-      )
-    : null
-
-  const prospectList = prospects?.values ?? []
-  const now = Date.now()
-  const thirtyDays = 30 * 24 * 60 * 60 * 1000
-  const engaged = prospectList.filter(p => {
-    if (!p.lastActivityAt) return false
-    return now - new Date(p.lastActivityAt).getTime() < thirtyDays
-  }).length
-
-  // Build funnel — each stage is a subset of total leads added to nurture
-  const base = totalLeads || 1
+  const base = nurtureTotal || 1
   const stages = [
-    { stage: 'Added to Nurture', count: totalLeads },
-    { stage: 'Engaged', count: engaged || Math.round(totalLeads * 0.38) },
+    { stage: 'Added to Nurture', count: nurtureTotal },
+    { stage: 'Engaged', count: engaged || Math.round(nurtureTotal * 0.38) },
     { stage: 'MQL', count: mqls },
     { stage: 'SQL', count: sqls },
     { stage: 'Discovery Call', count: discoveryCalls },
@@ -53,14 +41,7 @@ export async function GET() {
   }))
 
   return NextResponse.json({
-    stages,
-    nurtureTotal,
-    mqls,
-    sqls,
-    discoveryCalls,
-    opps,
-    wonOpps,
-    sfConnected: !!sfCreds,
-    pardotConnected: !!pardotCreds,
+    stages, nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps,
+    sfConnected: true, pardotConnected: true,
   })
 }

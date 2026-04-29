@@ -1,75 +1,59 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber } from '@/lib/utils'
-import { getPardotCreds, getSfCreds, pardotGet, sfQuery } from '@/lib/sf-api'
-import { prisma } from '@/lib/prisma'
+import { bqQuery, t, isConfigured } from '@/lib/bigquery'
 import ContactProspectTable from '@/components/tables/ContactProspectTable'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-interface Prospect {
-  id?: number
-  email?: string
-  firstName?: string
-  lastName?: string
-  jobTitle?: string
-  score?: number
-  grade?: string
-  lastActivityAt?: string
-}
-
-interface SfLead {
-  Email?: string
-  Pardot_Segments__c?: string
-  Pardot_Nurture_Step__c?: string
-  Normalize_Title_del__c?: string
+interface ProspectRow {
+  id: number
+  email: string
+  first_name: string
+  last_name: string
+  job_title: string
+  score: number
+  grade: string
+  last_activity_at: string
+  pardot_segments: string
+  pardot_nurture_step: string
+  normalized_title: string
 }
 
 async function getContactsData() {
   try {
-    let creds = await getPardotCreds()
+    if (!isConfigured()) return null
 
-    if (!creds) {
-      const [sfRec, pardotRec] = await Promise.all([
-        prisma.integration.findUnique({ where: { platform: 'salesforce' } }),
-        prisma.integration.findUnique({ where: { platform: 'pardot' } }),
-      ])
-      if (pardotRec?.status !== 'connected') return null
-      const ps = pardotRec.settings as Record<string, string> | null
-      const ss = sfRec?.settings as Record<string, string> | null
-      if (!ps?.businessUnitId || !ss?.accessToken) return null
-      creds = { accessToken: ss.accessToken, businessUnitId: ps.businessUnitId }
-    }
+    const rows = await bqQuery<ProspectRow>(`
+      SELECT
+        p.id,
+        p.email,
+        p.first_name,
+        p.last_name,
+        p.job_title,
+        COALESCE(p.score, 0)                   AS score,
+        COALESCE(p.grade, '')                  AS grade,
+        COALESCE(p.last_activity_at, '')       AS last_activity_at,
+        COALESCE(p.pardot_segments, '')        AS pardot_segments,
+        COALESCE(p.pardot_nurture_step, '')    AS pardot_nurture_step,
+        COALESCE(l.Normalize_Title_del__c, '') AS normalized_title
+      FROM ${t('pardot_prospects')} p
+      LEFT JOIN ${t('Leads')} l
+        ON LOWER(p.email) = LOWER(l.Email)
+        AND (l.OQL__c = TRUE)
+      ORDER BY score DESC
+      LIMIT 500
+    `)
 
-    const [data, sfCreds] = await Promise.all([
-      pardotGet<{ values?: Prospect[] }>(creds, 'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt&limit=500'),
-      getSfCreds(),
-    ])
-
-    const sfLeadsResult = sfCreds
-      ? await sfQuery<SfLead>(sfCreds, 'SELECT Email, Pardot_Segments__c, Pardot_Nurture_Step__c, Normalize_Title_del__c FROM Lead WHERE OQL__c = true LIMIT 1000')
-      : null
-
-    const segmentMap = new Map<string, { segment: string; nurtureStep: string; normalizedTitle: string }>()
-    for (const lead of sfLeadsResult?.records ?? []) {
-      if (lead.Email) {
-        segmentMap.set(lead.Email.toLowerCase(), {
-          segment: lead.Pardot_Segments__c ?? '—',
-          nurtureStep: lead.Pardot_Nurture_Step__c ?? '—',
-          normalizedTitle: lead.Normalize_Title_del__c ?? '—',
-        })
-      }
-    }
-
-    const list = data?.values ?? []
     const now = Date.now()
     const DAY = 86400000
     const buckets = { hot: 0, warm: 0, cold: 0, inactive: 0, suppression: 0, recycle: 0 }
 
-    for (const p of list) {
-      const score = p.score ?? 0
-      const days = p.lastActivityAt ? (now - new Date(p.lastActivityAt).getTime()) / DAY : 999
+    for (const p of rows) {
+      const score = Number(p.score ?? 0)
+      const lastMs = p.last_activity_at ? new Date(p.last_activity_at).getTime() : null
+      const days = lastMs != null && !isNaN(lastMs) ? (now - lastMs) / DAY : 999
       if (score < 0) { buckets.suppression++; continue }
       if (score >= 100 || days <= 7) { buckets.hot++; continue }
       if (score >= 50 || days <= 30) { buckets.warm++; continue }
@@ -78,24 +62,21 @@ async function getContactsData() {
       buckets.inactive++
     }
 
-    const prospects = [...list]
-      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
-      .slice(0, 50)
-      .map((p, i) => {
-        const sfInfo = segmentMap.get((p.email ?? '').toLowerCase())
-        return {
-          id: i + 1,
-          name: [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
-          title: p.jobTitle ?? '—',
-          score: p.score ?? 0,
-          grade: p.grade ?? '—',
-          status: (p.score ?? 0) >= 150 ? 'Engaged' : (p.score ?? 0) >= 75 ? 'Warm' : (p.score ?? 0) >= 25 ? 'Low Click' : 'Dark',
-          lastActivity: p.lastActivityAt ?? null,
-          segment: sfInfo?.segment ?? '—',
-          nurtureStep: sfInfo?.nurtureStep ?? '—',
-          normalizedTitle: sfInfo?.normalizedTitle ?? '—',
-        }
-      })
+    const prospects = rows.slice(0, 50).map((p, i) => {
+      const score = Number(p.score ?? 0)
+      return {
+        id: i + 1,
+        name: [p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
+        title: p.job_title || '—',
+        score,
+        grade: p.grade || '—',
+        status: score >= 150 ? 'Engaged' : score >= 75 ? 'Warm' : score >= 25 ? 'Low Click' : 'Dark',
+        lastActivity: p.last_activity_at || null,
+        segment: p.pardot_segments || '—',
+        nurtureStep: p.pardot_nurture_step || '—',
+        normalizedTitle: p.normalized_title || '—',
+      }
+    })
 
     return { buckets, prospects, total: 6421, connected: true }
   } catch (e) {
@@ -166,7 +147,7 @@ export default async function ContactsPage() {
     <div className="flex flex-col min-h-full">
       <Header
         title="Contact Intelligence"
-        subtitle={isLive ? 'Live Pardot Data' : 'Audience health, engagement buckets, suppression and recycle candidates'}
+        subtitle={isLive ? 'Live BigQuery Data' : 'Audience health, engagement buckets, suppression and recycle candidates'}
         userName={session?.user?.name}
         userRole={session?.user?.role!}
       />
@@ -175,7 +156,7 @@ export default async function ContactsPage() {
         {!isLive && (
           <div className="bg-yellow-500/8 border border-yellow-500/15 rounded-xl px-5 py-3 flex items-center gap-3">
             <svg className="w-4 h-4 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
-            <p className="text-yellow-400/80 text-sm">No data — <a href="/admin/integrations" className="underline">connect Pardot to see contact intelligence</a>.</p>
+            <p className="text-yellow-400/80 text-sm">No data — configure <code>BQ_PROJECT_ID</code> and <code>BQ_DATASET_ID</code> to see contact intelligence.</p>
           </div>
         )}
 
