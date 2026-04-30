@@ -38,7 +38,7 @@ async function getContactsData() {
         COALESCE(p.pardot_segments, '')        AS pardot_segments,
         COALESCE(p.pardot_nurture_step, '')    AS pardot_nurture_step,
         COALESCE(l.Normalize_Title_del__c, '') AS normalized_title
-      FROM ${t('pardot_prospects')} p
+      FROM ${t('Pardot_Prospects')} p
       LEFT JOIN ${t('Leads')} l
         ON LOWER(p.email) = LOWER(l.Email)
         AND (l.OQL__c = TRUE)

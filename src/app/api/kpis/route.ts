@@ -60,11 +60,11 @@ export async function GET() {
         ${EMAIL_BOUNCE_EXPR} AS bounces,
         ${EMAIL_UNSUB_EXPR}  AS unsubs,
         ${EMAIL_SPAM_EXPR}   AS spam
-      FROM ${t('pardot_userActivities')}
+      FROM ${t('Pardot_userActivity')}
     `),
-    bqCount(`SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}`),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}`),
     bqCount(`
-      SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}
+      SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
       WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
     `),
   ])

@@ -76,7 +76,7 @@ async function getSegmentsData() {
           ${EMAIL_CLICK_EXPR}  AS clicks,
           ${EMAIL_BOUNCE_EXPR} AS bounces,
           ${EMAIL_UNSUB_EXPR}  AS unsubs
-        FROM ${t('pardot_userActivities')}
+        FROM ${t('Pardot_userActivity')}
         WHERE campaign_name LIKE 'NS |%' AND campaign_name IS NOT NULL
         GROUP BY campaign_name
         HAVING ${EMAIL_SENT_EXPR} >= 10
@@ -85,7 +85,7 @@ async function getSegmentsData() {
         SELECT
           TRIM(SPLIT(pardot_segments, ',')[OFFSET(0)]) AS code,
           COUNT(*) AS members
-        FROM ${t('pardot_prospects')}
+        FROM ${t('Pardot_Prospects')}
         WHERE pardot_segments IS NOT NULL AND pardot_segments != ''
         GROUP BY code
       `),

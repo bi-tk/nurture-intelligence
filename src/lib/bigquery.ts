@@ -3,7 +3,7 @@
 // Auth: set GOOGLE_APPLICATION_CREDENTIALS to a service-account key file path,
 //       or set BQ_CREDENTIALS_JSON to the key file content as a JSON string.
 //
-// Email activity type_names from pardot_userActivities:
+// Email activity type_names from Pardot_userActivity:
 //   If your Pardot instance uses different type_name values, update EMAIL_TYPES below.
 
 import { BigQuery } from '@google-cloud/bigquery'
