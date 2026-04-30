@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 
 const EXCLUDED_PATHS = [
@@ -33,11 +34,17 @@ export default function FilterBar() {
   const pathname = usePathname()
   const router = useRouter()
   const searchParams = useSearchParams()
+  const [campaigns, setCampaigns] = useState<string[]>([])
+
+  useEffect(() => {
+    fetch('/api/campaigns').then(r => r.json()).then(setCampaigns).catch(() => {})
+  }, [])
 
   if (EXCLUDED_PATHS.some(p => pathname?.includes(p))) return null
 
   const dateRange = searchParams.get('dateRange') ?? '30d'
   const segment = searchParams.get('segment') ?? ''
+  const campaign = searchParams.get('campaign') ?? ''
 
   function updateFilter(key: string, value: string) {
     const params = new URLSearchParams(searchParams.toString())
@@ -66,6 +73,16 @@ export default function FilterBar() {
         <option value="">All Segments</option>
         {NURTURE_SEGMENTS.map(s => (
           <option key={s} value={s}>{s}</option>
+        ))}
+      </select>
+      <select
+        value={campaign}
+        onChange={e => updateFilter('campaign', e.target.value)}
+        className="bg-graphite-800 border border-white/10 text-white/60 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-pulse-blue/40 cursor-pointer max-w-[220px]"
+      >
+        <option value="">All Campaigns</option>
+        {campaigns.map(c => (
+          <option key={c} value={c}>{c}</option>
         ))}
       </select>
     </div>

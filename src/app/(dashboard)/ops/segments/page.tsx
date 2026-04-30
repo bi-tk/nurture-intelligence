@@ -56,7 +56,11 @@ interface CampaignRow {
 interface MemberCountRow { code: string; members: bigint | number }
 interface IndustryRow { Industry: string; cnt: bigint | number }
 
-async function getSegmentsData() {
+function escapeSql(value: string): string {
+  return value.replace(/'/g, "''")
+}
+
+async function getSegmentsData(campaign: string) {
   try {
     if (!isConfigured()) {
       return {
@@ -66,6 +70,10 @@ async function getSegmentsData() {
         sfConnected: false, pardotConnected: false,
       }
     }
+
+    const campaignFilter = campaign
+      ? `AND campaign_name = '${escapeSql(campaign)}'`
+      : `AND campaign_name LIKE 'NS |%'`
 
     const [campaignRows, memberRows, industryRows] = await Promise.all([
       bqQuery<CampaignRow>(`
@@ -77,7 +85,8 @@ async function getSegmentsData() {
           ${EMAIL_BOUNCE_EXPR} AS bounces,
           ${EMAIL_UNSUB_EXPR}  AS unsubs
         FROM ${t('Pardot_userActivity')}
-        WHERE campaign_name LIKE 'NS |%' AND campaign_name IS NOT NULL
+        WHERE campaign_name IS NOT NULL AND campaign_name != ''
+          ${campaignFilter}
         GROUP BY campaign_name
         HAVING ${EMAIL_SENT_EXPR} >= 10
       `),
@@ -150,9 +159,14 @@ async function getSegmentsData() {
   }
 }
 
-export default async function SegmentsPage() {
+export default async function SegmentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ campaign?: string }>
+}) {
   const session = await auth()
-  const data = await getSegmentsData()
+  const { campaign = '' } = await searchParams
+  const data = await getSegmentsData(campaign)
   const isLive = data.pardotConnected || data.sfConnected
 
   return (
