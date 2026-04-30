@@ -4,6 +4,7 @@ import {
   bqQuery, t, pct, isConfigured,
   EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
   EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR,
+  campaignSqlFilter,
 } from '@/lib/bigquery'
 import SegmentTables from '@/components/tables/SegmentTables'
 
@@ -56,11 +57,7 @@ interface CampaignRow {
 interface MemberCountRow { code: string; members: bigint | number }
 interface IndustryRow { Industry: string; cnt: bigint | number }
 
-function escapeSql(value: string): string {
-  return value.replace(/'/g, "''")
-}
-
-async function getSegmentsData(campaign: string) {
+async function getSegmentsData(campaigns: string[]) {
   try {
     if (!isConfigured()) {
       return {
@@ -71,8 +68,8 @@ async function getSegmentsData(campaign: string) {
       }
     }
 
-    const campaignFilter = campaign
-      ? `AND campaign_name = '${escapeSql(campaign)}'`
+    const campaignFilter = campaigns.length > 0
+      ? campaignSqlFilter(campaigns)
       : `AND campaign_name LIKE 'NS |%'`
 
     const [campaignRows, memberRows, industryRows] = await Promise.all([
@@ -162,11 +159,14 @@ async function getSegmentsData(campaign: string) {
 export default async function SegmentsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ campaign?: string }>
+  searchParams: Promise<{ campaign?: string | string[] }>
 }) {
   const session = await auth()
-  const { campaign = '' } = await searchParams
-  const data = await getSegmentsData(campaign)
+  const params = await searchParams
+  const campaigns = params.campaign
+    ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
+    : []
+  const data = await getSegmentsData(campaigns)
   const isLive = data.pardotConnected || data.sfConnected
 
   return (

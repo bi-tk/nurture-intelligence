@@ -3,18 +3,19 @@ import Header from '@/components/layout/Header'
 import FunnelChart from '@/components/charts/FunnelChart'
 import KpiCard from '@/components/ui/KpiCard'
 import { formatPercent } from '@/lib/utils'
-import { bqCount, t, isConfigured } from '@/lib/bigquery'
+import { bqCount, t, isConfigured, leadsCampaignFilter } from '@/lib/bigquery'
 
 export const dynamic = 'force-dynamic'
 
-async function fetchFunnelData() {
+async function fetchFunnelData(campaigns: string[]) {
   try {
     if (!isConfigured()) return null
+    const sfFilter = leadsCampaignFilter(campaigns)
     const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE OQL__c = TRUE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE OQL__c = TRUE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE ${sfFilter}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE StageName = 'Closed Won'`),
       bqCount(`
@@ -39,9 +40,17 @@ async function fetchFunnelData() {
   } catch { return null }
 }
 
-export default async function FunnelPage() {
+export default async function FunnelPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ campaign?: string | string[] }>
+}) {
   const session = await auth()
-  const live = await fetchFunnelData()
+  const params = await searchParams
+  const campaigns = params.campaign
+    ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
+    : []
+  const live = await fetchFunnelData(campaigns)
   const funnelData = live?.stages ?? []
   const isLive = !!live
 

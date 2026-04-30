@@ -4,6 +4,7 @@ import {
   bqQuery, t, pct, isConfigured,
   EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
   EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR, EMAIL_SPAM_EXPR,
+  campaignSqlFilter,
 } from '@/lib/bigquery'
 import { prisma } from '@/lib/prisma'
 import SequencesTables from '@/components/tables/SequencesTables'
@@ -64,16 +65,12 @@ interface CampaignRow {
 
 interface ProspectRow { job_title: string; score: number }
 
-function escapeSql(value: string): string {
-  return value.replace(/'/g, "''")
-}
-
-async function getSequencesData(campaign: string) {
+async function getSequencesData(campaigns: string[]) {
   try {
     if (!isConfigured()) return { sequences: [], subjectLines: [], prospectTitles: [], connected: false }
 
-    const campaignFilter = campaign
-      ? `AND campaign_name = '${escapeSql(campaign)}'`
+    const campaignFilter = campaigns.length > 0
+      ? campaignSqlFilter(campaigns)
       : `AND NOT (
             LOWER(campaign_name) LIKE '%copy%'
             OR LOWER(campaign_name) LIKE '% test%'
@@ -188,11 +185,14 @@ async function getSequencesData(campaign: string) {
 export default async function SequencesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ campaign?: string }>
+  searchParams: Promise<{ campaign?: string | string[] }>
 }) {
   const session = await auth()
-  const { campaign = '' } = await searchParams
-  const data = await getSequencesData(campaign)
+  const params = await searchParams
+  const campaigns = params.campaign
+    ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
+    : []
+  const data = await getSequencesData(campaigns)
   const isLive = data.connected
 
   return (

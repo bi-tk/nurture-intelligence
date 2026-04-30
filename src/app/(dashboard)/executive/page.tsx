@@ -10,6 +10,7 @@ import {
   EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
   EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR, EMAIL_SPAM_EXPR,
   IS_EMAIL_OPEN, IS_EMAIL_CLICK,
+  campaignSqlFilter, leadsCampaignFilter,
 } from '@/lib/bigquery'
 
 export const dynamic = 'force-dynamic'
@@ -18,24 +19,22 @@ const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'
 
 // ─── Fetch helpers ────────────────────────────────────────────────────────────
 
-function escapeSql(value: string): string {
-  return value.replace(/'/g, "''")
-}
-
-async function fetchKpis(campaign: string) {
+async function fetchKpis(campaigns: string[]) {
   try {
     if (!isConfigured()) return null
 
+    const sfFilter = leadsCampaignFilter(campaigns)
+
     const [mqlCount, sqlCount, discoveryCount, wonRevenue, pipelineValue, newOpps] = await Promise.all([
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE ${sfFilter}`),
       bqSum(`SELECT SUM(Amount) AS n FROM ${t('Opportunities')} WHERE IsWon = TRUE AND IsClosed = TRUE AND Amount < 10000000`),
       bqSum(`SELECT SUM(Amount) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE FORMAT_DATE('%Y-%m', DATE(CreatedDate)) = FORMAT_DATE('%Y-%m', CURRENT_DATE())`),
     ])
 
-    const campaignFilter = campaign ? `WHERE campaign_name = '${escapeSql(campaign)}'` : ''
+    const activityFilter = campaignSqlFilter(campaigns, 'WHERE')
 
     interface EmailRow {
       sent: bigint | number; unique_opens: bigint | number; unique_clicks: bigint | number
@@ -51,7 +50,7 @@ async function fetchKpis(campaign: string) {
           ${EMAIL_UNSUB_EXPR}  AS unsubs,
           ${EMAIL_SPAM_EXPR}   AS spam
         FROM ${t('Pardot_userActivity')}
-        ${campaignFilter}
+        ${activityFilter}
       `),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}`),
       bqCount(`
@@ -98,14 +97,15 @@ async function fetchKpis(campaign: string) {
   } catch { return null }
 }
 
-async function fetchFunnelData() {
+async function fetchFunnelData(campaigns: string[]) {
   try {
     if (!isConfigured()) return null
+    const sfFilter = leadsCampaignFilter(campaigns)
     const [totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Marketing_nurture__c = TRUE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Marketing_nurture__c = TRUE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE ${sfFilter}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsWon = TRUE AND IsClosed = TRUE`),
       bqCount(`
@@ -136,12 +136,12 @@ interface CampaignTrendRow {
   min_created_at: string
 }
 
-async function fetchTrendAndSequences(campaign: string) {
+async function fetchTrendAndSequences(campaigns: string[]) {
   try {
     if (!isConfigured()) return null
 
-    const campaignFilter = campaign
-      ? `AND campaign_name = '${escapeSql(campaign)}'`
+    const campaignFilter = campaigns.length > 0
+      ? campaignSqlFilter(campaigns)
       : `AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')`
 
     const rows = await bqQuery<CampaignTrendRow>(`
@@ -252,13 +252,16 @@ async function fetchSegments() {
 export default async function ExecutivePage({
   searchParams,
 }: {
-  searchParams: Promise<{ campaign?: string }>
+  searchParams: Promise<{ campaign?: string | string[] }>
 }) {
   const session = await auth()
-  const { campaign = '' } = await searchParams
+  const params = await searchParams
+  const campaigns = params.campaign
+    ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
+    : []
 
   const [liveKpi, liveFunnel, liveTrendSeq, liveSegments] = await Promise.all([
-    fetchKpis(campaign), fetchFunnelData(), fetchTrendAndSequences(campaign), fetchSegments(),
+    fetchKpis(campaigns), fetchFunnelData(campaigns), fetchTrendAndSequences(campaigns), fetchSegments(),
   ])
 
   const zeroKpi = {
