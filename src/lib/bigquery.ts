@@ -80,3 +80,30 @@ export const EMAIL_CLICK_EXPR = `COUNTIF(${IS_EMAIL_CLICK})`
 export const EMAIL_BOUNCE_EXPR = `COUNTIF(${IS_EMAIL_BOUNCE})`
 export const EMAIL_UNSUB_EXPR = `COUNTIF(${IS_EMAIL_UNSUB})`
 export const EMAIL_SPAM_EXPR = `COUNTIF(${IS_EMAIL_SPAM})`
+
+// ─── Campaign filter helpers ───────────────────────────────────────────────────
+
+function sqlList(values: string[]): string {
+  return values.map(v => `'${v.replace(/'/g, "''")}'`).join(', ')
+}
+
+// AND/WHERE fragment to filter Pardot_userActivity rows by campaign_name
+export function campaignSqlFilter(campaigns: string[], prefix = 'AND'): string {
+  if (campaigns.length === 0) return ''
+  if (campaigns.length === 1) return `${prefix} campaign_name = '${campaigns[0].replace(/'/g, "''")}'`
+  return `${prefix} campaign_name IN (${sqlList(campaigns)})`
+}
+
+// AND fragment to filter Leads rows to those whose email appeared in the given campaigns
+export function leadsCampaignFilter(campaigns: string[]): string {
+  if (campaigns.length === 0) return ''
+  const inClause = campaigns.length === 1
+    ? `= '${campaigns[0].replace(/'/g, "''")}'`
+    : `IN (${sqlList(campaigns)})`
+  return `AND Email IN (
+    SELECT DISTINCT p.email
+    FROM ${t('Pardot_Prospects')} p
+    JOIN ${t('Pardot_userActivity')} ua ON ua.prospect_id = p.id
+    WHERE ua.campaign_name ${inClause}
+  )`
+}
