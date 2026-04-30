@@ -44,11 +44,11 @@ async function fetchKpis() {
           ${EMAIL_BOUNCE_EXPR} AS bounces,
           ${EMAIL_UNSUB_EXPR}  AS unsubs,
           ${EMAIL_SPAM_EXPR}   AS spam
-        FROM ${t('pardot_userActivities')}
+        FROM ${t('Pardot_userActivity')}
       `),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}`),
       bqCount(`
-        SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}
+        SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
         WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
       `),
     ])
@@ -102,7 +102,7 @@ async function fetchFunnelData() {
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsWon = TRUE AND IsClosed = TRUE`),
       bqCount(`
-        SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}
+        SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
         WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
       `),
     ])
@@ -144,7 +144,7 @@ async function fetchTrendAndSequences() {
         ${EMAIL_BOUNCE_EXPR} AS bounces,
         ${EMAIL_UNSUB_EXPR}  AS unsubs,
         MIN(CAST(created_at AS STRING)) AS min_created_at
-      FROM ${t('pardot_userActivities')}
+      FROM ${t('Pardot_userActivity')}
       WHERE campaign_name IS NOT NULL AND campaign_name != ''
         AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')
       GROUP BY campaign_name, period_month, period_week
@@ -226,7 +226,7 @@ async function fetchSegments() {
       SELECT
         TRIM(SPLIT(pardot_segments, ',')[OFFSET(0)]) AS pardot_segments,
         COUNT(*) AS members
-      FROM ${t('pardot_prospects')}
+      FROM ${t('Pardot_Prospects')}
       WHERE pardot_segments IS NOT NULL AND pardot_segments != ''
       GROUP BY pardot_segments
       ORDER BY members DESC
