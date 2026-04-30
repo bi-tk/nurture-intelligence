@@ -18,7 +18,11 @@ const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'
 
 // ─── Fetch helpers ────────────────────────────────────────────────────────────
 
-async function fetchKpis() {
+function escapeSql(value: string): string {
+  return value.replace(/'/g, "''")
+}
+
+async function fetchKpis(campaign: string) {
   try {
     if (!isConfigured()) return null
 
@@ -30,6 +34,8 @@ async function fetchKpis() {
       bqSum(`SELECT SUM(Amount) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE FORMAT_DATE('%Y-%m', DATE(CreatedDate)) = FORMAT_DATE('%Y-%m', CURRENT_DATE())`),
     ])
+
+    const campaignFilter = campaign ? `WHERE campaign_name = '${escapeSql(campaign)}'` : ''
 
     interface EmailRow {
       sent: bigint | number; unique_opens: bigint | number; unique_clicks: bigint | number
@@ -45,6 +51,7 @@ async function fetchKpis() {
           ${EMAIL_UNSUB_EXPR}  AS unsubs,
           ${EMAIL_SPAM_EXPR}   AS spam
         FROM ${t('Pardot_userActivity')}
+        ${campaignFilter}
       `),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}`),
       bqCount(`
@@ -129,9 +136,13 @@ interface CampaignTrendRow {
   min_created_at: string
 }
 
-async function fetchTrendAndSequences() {
+async function fetchTrendAndSequences(campaign: string) {
   try {
     if (!isConfigured()) return null
+
+    const campaignFilter = campaign
+      ? `AND campaign_name = '${escapeSql(campaign)}'`
+      : `AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')`
 
     const rows = await bqQuery<CampaignTrendRow>(`
       SELECT
@@ -146,7 +157,7 @@ async function fetchTrendAndSequences() {
         MIN(CAST(created_at AS STRING)) AS min_created_at
       FROM ${t('Pardot_userActivity')}
       WHERE campaign_name IS NOT NULL AND campaign_name != ''
-        AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')
+        ${campaignFilter}
       GROUP BY campaign_name, period_month, period_week
       HAVING ${EMAIL_SENT_EXPR} >= 5
     `)
@@ -238,11 +249,16 @@ async function fetchSegments() {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default async function ExecutivePage() {
+export default async function ExecutivePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ campaign?: string }>
+}) {
   const session = await auth()
+  const { campaign = '' } = await searchParams
 
   const [liveKpi, liveFunnel, liveTrendSeq, liveSegments] = await Promise.all([
-    fetchKpis(), fetchFunnelData(), fetchTrendAndSequences(), fetchSegments(),
+    fetchKpis(campaign), fetchFunnelData(), fetchTrendAndSequences(campaign), fetchSegments(),
   ])
 
   const zeroKpi = {

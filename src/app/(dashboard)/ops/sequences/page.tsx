@@ -64,9 +64,21 @@ interface CampaignRow {
 
 interface ProspectRow { job_title: string; score: number }
 
-async function getSequencesData() {
+function escapeSql(value: string): string {
+  return value.replace(/'/g, "''")
+}
+
+async function getSequencesData(campaign: string) {
   try {
     if (!isConfigured()) return { sequences: [], subjectLines: [], prospectTitles: [], connected: false }
+
+    const campaignFilter = campaign
+      ? `AND campaign_name = '${escapeSql(campaign)}'`
+      : `AND NOT (
+            LOWER(campaign_name) LIKE '%copy%'
+            OR LOWER(campaign_name) LIKE '% test%'
+            OR LOWER(campaign_name) LIKE '%testing%'
+          )`
 
     const [thresholds, campaignRows, prospectRows] = await Promise.all([
       getSignalThresholds(),
@@ -82,11 +94,7 @@ async function getSequencesData() {
           MIN(CAST(created_at AS STRING)) AS min_created_at
         FROM ${t('Pardot_userActivity')}
         WHERE campaign_name IS NOT NULL AND campaign_name != ''
-          AND NOT (
-            LOWER(campaign_name) LIKE '%copy%'
-            OR LOWER(campaign_name) LIKE '% test%'
-            OR LOWER(campaign_name) LIKE '%testing%'
-          )
+          ${campaignFilter}
         GROUP BY campaign_name
         HAVING ${EMAIL_SENT_EXPR} >= 10
         ORDER BY opens DESC
@@ -177,9 +185,14 @@ async function getSequencesData() {
   }
 }
 
-export default async function SequencesPage() {
+export default async function SequencesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ campaign?: string }>
+}) {
   const session = await auth()
-  const data = await getSequencesData()
+  const { campaign = '' } = await searchParams
+  const data = await getSequencesData(campaign)
   const isLive = data.connected
 
   return (
