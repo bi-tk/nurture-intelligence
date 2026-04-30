@@ -38,7 +38,7 @@ export async function GET() {
     return NextResponse.json({ buckets: null, prospects: [], connected: false })
   }
 
-  // Join pardot_prospects with Leads on email to get segment/nurture/title info
+  // Join Pardot_Prospects with Leads on email to get segment/nurture/title info
   const rows = await bqQuery<ProspectRow>(`
     SELECT
       p.id,
@@ -52,7 +52,7 @@ export async function GET() {
       COALESCE(p.pardot_segments, '')       AS pardot_segments,
       COALESCE(p.pardot_nurture_step, '')   AS pardot_nurture_step,
       COALESCE(l.Normalize_Title_del__c, '') AS normalized_title
-    FROM ${t('pardot_prospects')} p
+    FROM ${t('Pardot_Prospects')} p
     LEFT JOIN ${t('Leads')} l
       ON LOWER(p.email) = LOWER(l.Email)
       AND (l.MQL_Response__c = TRUE OR l.SQL__c = TRUE)

@@ -76,7 +76,7 @@ export async function GET(_req: NextRequest) {
         ${EMAIL_UNSUB_EXPR}  AS unsubs,
         ${EMAIL_SPAM_EXPR}   AS spam,
         MIN(CAST(created_at AS STRING)) AS min_created_at
-      FROM ${t('pardot_userActivities')}
+      FROM ${t('Pardot_userActivity')}
       WHERE campaign_name IS NOT NULL AND campaign_name != ''
         AND NOT (
           LOWER(campaign_name) LIKE '%copy%'
@@ -90,7 +90,7 @@ export async function GET(_req: NextRequest) {
     `),
     bqQuery<ProspectRow>(`
       SELECT job_title, COALESCE(score, 0) AS score
-      FROM ${t('pardot_prospects')}
+      FROM ${t('Pardot_Prospects')}
       WHERE job_title IS NOT NULL AND job_title != ''
       LIMIT 1000
     `),

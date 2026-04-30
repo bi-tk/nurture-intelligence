@@ -18,7 +18,7 @@ export async function GET() {
     bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
     bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE StageName = 'Closed Won'`),
     bqCount(`
-      SELECT COUNT(*) AS n FROM ${t('pardot_prospects')}
+      SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
       WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
     `),
   ])

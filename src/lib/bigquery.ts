@@ -3,7 +3,7 @@
 // Auth: set GOOGLE_APPLICATION_CREDENTIALS to a service-account key file path,
 //       or set BQ_CREDENTIALS_JSON to the key file content as a JSON string.
 //
-// Email activity type_names from pardot_userActivities:
+// Email activity type_names from Pardot_userActivity:
 //   If your Pardot instance uses different type_name values, update EMAIL_TYPES below.
 
 import { BigQuery } from '@google-cloud/bigquery'
@@ -60,16 +60,18 @@ export function pct(numerator: number, denominator: number, decimals = 1): numbe
 }
 
 // ─── Email activity type helpers ──────────────────────────────────────────────
-// These COUNTIF expressions match common Pardot v4 type_name values.
-// Adjust the IN-lists if your instance uses different names.
+// Pardot v4 visitor-activity type numbers (source: Pardot v4 API docs):
+//   6=Sent, 11=Open, 12=Unsubscribe_Open, 13=Bounce, 14=Spam_Complaint,
+//   17=Third_Party_Click, 35=Indirect_Unsubscribe_Open, 36=Indirect_Bounce
+//   1=Click with type_name='Email Tracker' (email link clicks)
 
 // Boolean condition strings — use inside COUNTIF() or IF()
-export const IS_EMAIL_SENT = `LOWER(type_name) IN ('email','sent email','send email','email sent','list email sent','mass email sent','email send')`
-export const IS_EMAIL_OPEN = `LOWER(type_name) IN ('email open','email opened','view email','viewed email','email view','open email')`
-export const IS_EMAIL_CLICK = `LOWER(type_name) IN ('email click','email clicked','click email','clicked email','email link click')`
-export const IS_EMAIL_BOUNCE = `LOWER(type_name) IN ('email bounce','bounced email','hard bounce','soft bounce','email hard bounce','email soft bounce','bounce email')`
-export const IS_EMAIL_UNSUB = `LOWER(type_name) IN ('email unsubscribe','email unsubscribed','unsubscribe email','opt out','email opt out')`
-export const IS_EMAIL_SPAM = `LOWER(type_name) LIKE '%spam%'`
+export const IS_EMAIL_SENT   = `type = 6`
+export const IS_EMAIL_OPEN   = `type = 11`
+export const IS_EMAIL_CLICK  = `(type = 1 AND type_name = 'Email Tracker') OR type = 17`
+export const IS_EMAIL_BOUNCE = `type IN (13, 36)`
+export const IS_EMAIL_UNSUB  = `type IN (12, 35)`
+export const IS_EMAIL_SPAM   = `type = 14`
 
 export const EMAIL_SENT_EXPR = `COUNTIF(${IS_EMAIL_SENT})`.trim()
 
