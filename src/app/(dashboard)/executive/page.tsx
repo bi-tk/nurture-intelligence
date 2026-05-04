@@ -259,15 +259,27 @@ const SEGMENT_NAME_MAP: Record<string, string> = {
   CIO_NT_U50: 'CIOs & Tech Leaders | Non-Tech | Under $50M new',
 }
 
-async function fetchSegments() {
+async function fetchSegments(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
+
+    const uaCampaign = campaigns.length > 0
+      ? `AND ua.campaign_name IN (${campaigns.map(c => `'${c.replace(/'/g, "''")}'`).join(', ')})`
+      : ''
+    const uaDate = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
+    const leadDate = dateIntervalFilter(dateRange, 'l.CreatedDate')
+    const mqlCampaign = campaignSqlFilter(campaigns)
+    const mqlDate = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
+
     interface SegRow {
       segment_name: string; members: bigint | number
       sent: bigint | number; opens: bigint | number
       clicks: bigint | number; bounces: bigint | number
     }
-    interface IndRow { industry: string; cnt: bigint | number }
+    interface IndRow {
+      industry: string; leads: bigint | number
+      mqls: bigint | number; sqls: bigint | number
+    }
 
     const [segRows, indRows] = await Promise.all([
       bqQuery<SegRow>(`
@@ -285,18 +297,35 @@ async function fetchSegments() {
             AND pardot_segments != ''
             AND LOWER(TRIM(pardot_segments)) != 'nan'
         ) pp
-        LEFT JOIN ${t('Pardot_userActivity')} ua ON ua.prospect_id = pp.id
+        LEFT JOIN ${t('Pardot_userActivity')} ua
+          ON ua.prospect_id = pp.id
+          ${uaCampaign}
+          ${uaDate}
         GROUP BY pp.segment_name
         HAVING COUNT(DISTINCT pp.id) > 0
         ORDER BY members DESC
         LIMIT 6
       `),
       bqQuery<IndRow>(`
-        SELECT Industry AS industry, COUNT(*) AS cnt
-        FROM ${t('Leads')}
-        WHERE Industry IS NOT NULL AND Industry != ''
-        GROUP BY Industry
-        ORDER BY cnt DESC
+        SELECT
+          l.Industry AS industry,
+          COUNT(DISTINCT l.Email) AS leads,
+          COUNT(DISTINCT CASE WHEN f.prospect_id IS NOT NULL THEN l.Email END) AS mqls,
+          COUNT(DISTINCT CASE WHEN loj.SQL__c = TRUE THEN l.Email END) AS sqls
+        FROM ${t('Leads')} l
+        LEFT JOIN ${t('Pardot_Prospects')} pp ON LOWER(pp.email) = LOWER(l.Email)
+        LEFT JOIN (
+          SELECT DISTINCT prospect_id
+          FROM ${t('Pardot_userActivity')}
+          WHERE type = 4 AND type_name IN ('Form', 'Form Handler')
+          ${mqlCampaign} ${mqlDate}
+        ) f ON f.prospect_id = pp.id
+        LEFT JOIN ${t('Leads_Opp_Joined')} loj ON loj.Email = l.Email
+        WHERE l.Industry IS NOT NULL AND l.Industry != ''
+          AND l.Industry NOT IN ('Other', 'No Match')
+          ${leadDate}
+        GROUP BY l.Industry
+        ORDER BY mqls DESC, leads DESC
         LIMIT 8
       `),
     ])
@@ -315,7 +344,12 @@ async function fetchSegments() {
       }
     })
 
-    const industries = indRows.map(r => ({ name: String(r.industry), count: Number(r.cnt) }))
+    const industries = indRows.map(r => ({
+      name: String(r.industry),
+      leads: Number(r.leads),
+      mqls: Number(r.mqls),
+      sqls: Number(r.sqls),
+    }))
     return { segments, industries }
   } catch { return null }
 }
@@ -336,7 +370,7 @@ export default async function ExecutivePage({
 
   const [liveKpi, liveFunnel, liveTrendSeq, liveSegments] = await Promise.all([
     fetchKpis(campaigns, dateRange), fetchFunnelData(campaigns, dateRange),
-    fetchTrendAndSequences(campaigns, dateRange), fetchSegments(),
+    fetchTrendAndSequences(campaigns, dateRange), fetchSegments(campaigns, dateRange),
   ])
 
   const zeroKpi = {
@@ -576,13 +610,17 @@ export default async function ExecutivePage({
                   <tr className="text-white/25 text-xs font-mono">
                     <th className="text-left pb-3">Industry</th>
                     <th className="text-right pb-3">Leads</th>
+                    <th className="text-right pb-3">MQLs</th>
+                    <th className="text-right pb-3">SQLs</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {topIndustries.map((ind) => (
                     <tr key={ind.name} className="text-white/70">
                       <td className="py-2.5">{ind.name}</td>
-                      <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.count.toLocaleString()}</td>
+                      <td className="text-right py-2.5 font-mono">{ind.leads.toLocaleString()}</td>
+                      <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.mqls.toLocaleString()}</td>
+                      <td className="text-right py-2.5 font-mono">{ind.sqls.toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
