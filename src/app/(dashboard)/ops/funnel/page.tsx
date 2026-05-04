@@ -35,7 +35,7 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
       { stage: 'Won', count: wonOpps },
     ]
     return {
-      stages: raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(1)) })),
+      stages: raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(2)) })),
       nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps,
     }
   } catch { return null }

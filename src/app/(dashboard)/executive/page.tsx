@@ -131,7 +131,7 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
       { stage: 'Opportunity', count: opps },
       { stage: 'Won', count: wonOpps },
     ]
-    return raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(1)) }))
+    return raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(2)) }))
   } catch { return null }
 }
 
