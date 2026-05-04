@@ -310,16 +310,19 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
         SELECT
           l.Industry AS industry,
           COUNT(DISTINCT l.Email) AS leads,
-          COUNT(DISTINCT CASE WHEN f.prospect_id IS NOT NULL THEN l.Email END) AS mqls,
+          COUNT(DISTINCT CASE WHEN l.Email IN (
+            SELECT DISTINCT email
+            FROM ${t('Pardot_Prospects')}
+            WHERE NOT REGEXP_CONTAINS(LOWER(email), r'test|tkxel|work|uzair|sami')
+              AND id IN (
+                SELECT DISTINCT prospect_id
+                FROM ${t('Pardot_userActivity')}
+                WHERE type = 4 AND type_name IN ('Form', 'Form Handler')
+                ${mqlCampaign} ${mqlDate}
+              )
+          ) THEN l.Email END) AS mqls,
           COUNT(DISTINCT CASE WHEN loj.SQL__c = TRUE THEN l.Email END) AS sqls
         FROM ${t('Leads')} l
-        LEFT JOIN ${t('Pardot_Prospects')} pp ON LOWER(pp.email) = LOWER(l.Email)
-        LEFT JOIN (
-          SELECT DISTINCT prospect_id
-          FROM ${t('Pardot_userActivity')}
-          WHERE type = 4 AND type_name IN ('Form', 'Form Handler')
-          ${mqlCampaign} ${mqlDate}
-        ) f ON f.prospect_id = pp.id
         LEFT JOIN ${t('Leads_Opp_Joined')} loj ON loj.Email = l.Email
         WHERE l.Industry IS NOT NULL AND l.Industry != ''
           AND l.Industry NOT IN ('Other', 'No Match')
