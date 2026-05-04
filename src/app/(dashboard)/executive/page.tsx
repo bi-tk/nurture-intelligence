@@ -225,18 +225,33 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
 
     const sequences = [...campaignMap.values()]
       .filter(c => c.sent >= 10)
-      .map(c => ({
-        name: c.name,
-        openRate: pct(c.opens, c.delivered),
-        clickRate: pct(c.clicks, c.delivered),
-      }))
+      .map(c => {
+        const parts = c.name.split(' | ')
+        const subject = parts[parts.length - 1]?.trim() || c.name
+        return {
+          name: c.name,
+          subject,
+          openRate: pct(c.opens, c.delivered),
+          clickRate: pct(c.clicks, c.delivered),
+        }
+      })
       .sort((a, b) => b.openRate - a.openRate)
 
-    const topSequences = sequences.slice(0, 3).map(s => ({ name: s.name, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
-    const worstSequences = sequences.slice(-3).reverse().map(s => ({ name: s.name, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
+    const topSequences = sequences.slice(0, 3).map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
+    const worstSequences = sequences.slice(-3).reverse().map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
 
     return { monthlyData, weeklyData, trendData, topSequences, worstSequences }
   } catch { return null }
+}
+
+const SEGMENT_NAME_MAP: Record<string, string> = {
+  CIO_NT_MM: 'CIOs & Tech Leaders | Non-Tech | $50–$500M',
+  CEO_NT: 'CEOs & Non-Tech Leaders | Non-Tech',
+  CEO_T_U50: 'CEOs & Non-Tech Leaders | Tech | Under $50M',
+  CTO_T_U50: 'CTOs & Tech Leaders | Tech | Under $50M',
+  CTO_FTS: 'CTOs & Tech Leaders | Funded Tech Startups',
+  PE_MP: 'Managing Partners | Private Equity',
+  CIO_NT_U50: 'CIOs & Tech Leaders | Non-Tech | Under $50M new',
 }
 
 async function fetchSegments() {
@@ -253,7 +268,10 @@ async function fetchSegments() {
       ORDER BY members DESC
       LIMIT 5
     `)
-    return rows.map(r => ({ name: String(r.pardot_segments), openRate: 0, clickRate: 0, mqlRate: 0 }))
+    return rows.map(r => {
+      const code = String(r.pardot_segments)
+      return { name: SEGMENT_NAME_MAP[code] ?? code, members: Number(r.members) }
+    })
   } catch { return null }
 }
 
@@ -440,12 +458,13 @@ export default async function ExecutivePage({
             ) : (
               <div className="space-y-3">
                 {topSequences.map((s) => (
-                  <div key={s.name} className="flex items-center justify-between">
-                    <div>
-                      <p className="text-white text-sm font-medium truncate max-w-[240px]">{s.name}</p>
+                  <div key={s.name} className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-white text-sm font-medium truncate">{s.name}</p>
+                      <p className="text-white/50 text-xs truncate mt-0.5">{s.subject}</p>
                       <p className="text-white/30 text-xs font-mono mt-0.5">Open {s.mqlRate}% · Click {s.sqlRate}%</p>
                     </div>
-                    <p className="text-accent-green text-sm font-mono font-medium">{s.wonRevenue ? formatCurrency(s.wonRevenue) : '—'}</p>
+                    <p className="text-accent-green text-sm font-mono font-medium shrink-0">{s.wonRevenue ? formatCurrency(s.wonRevenue) : '—'}</p>
                   </div>
                 ))}
               </div>
@@ -458,9 +477,10 @@ export default async function ExecutivePage({
             ) : (
               <div className="space-y-3">
                 {worstSequences.map((s) => (
-                  <div key={s.name} className="flex items-center justify-between">
-                    <div>
-                      <p className="text-white text-sm font-medium truncate max-w-[240px]">{s.name}</p>
+                  <div key={s.name} className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-white text-sm font-medium truncate">{s.name}</p>
+                      <p className="text-white/50 text-xs truncate mt-0.5">{s.subject}</p>
                       <p className="text-white/30 text-xs font-mono mt-0.5">Open {s.mqlRate}% · Click {s.sqlRate}%</p>
                     </div>
                     <p className="text-accent-red text-sm font-mono font-medium">{s.wonRevenue ? formatCurrency(s.wonRevenue) : '—'}</p>
@@ -482,18 +502,14 @@ export default async function ExecutivePage({
                 <thead>
                   <tr className="text-white/25 text-xs font-mono">
                     <th className="text-left pb-3">Segment</th>
-                    <th className="text-right pb-3">Open Rate</th>
-                    <th className="text-right pb-3">Click Rate</th>
-                    <th className="text-right pb-3">MQL Rate</th>
+                    <th className="text-right pb-3">Members</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {topSegments.map((s) => (
                     <tr key={s.name} className="text-white/70">
                       <td className="py-2.5">{s.name}</td>
-                      <td className="text-right py-2.5 font-mono">{s.openRate ? formatPercent(s.openRate) : '—'}</td>
-                      <td className="text-right py-2.5 font-mono">{s.clickRate ? formatPercent(s.clickRate) : '—'}</td>
-                      <td className="text-right py-2.5 font-mono text-pulse-blue">{s.mqlRate ? formatPercent(s.mqlRate) : '—'}</td>
+                      <td className="text-right py-2.5 font-mono text-pulse-blue">{s.members?.toLocaleString() ?? '—'}</td>
                     </tr>
                   ))}
                 </tbody>
