@@ -94,16 +94,20 @@ export function campaignSqlFilter(campaigns: string[], prefix = 'AND'): string {
   return `${prefix} campaign_name IN (${sqlList(campaigns)})`
 }
 
-// AND fragment to filter Leads rows to those whose email appeared in the given campaigns
+// AND fragment to filter Salesforce rows to those whose email appeared in the given campaigns.
+// Uses the pattern: email IN (SELECT email FROM Pardot_Prospects WHERE id IN (SELECT prospect_id FROM Pardot_userActivity WHERE campaign_name IN (...)))
 export function leadsCampaignFilter(campaigns: string[]): string {
   if (campaigns.length === 0) return ''
   const inClause = campaigns.length === 1
     ? `= '${campaigns[0].replace(/'/g, "''")}'`
     : `IN (${sqlList(campaigns)})`
-  return `AND Email IN (
-    SELECT DISTINCT p.email
-    FROM ${t('Pardot_Prospects')} p
-    JOIN ${t('Pardot_userActivity')} ua ON ua.prospect_id = p.id
-    WHERE ua.campaign_name ${inClause}
+  return `AND email IN (
+    SELECT DISTINCT email
+    FROM ${t('Pardot_Prospects')}
+    WHERE id IN (
+      SELECT DISTINCT prospect_id
+      FROM ${t('Pardot_userActivity')}
+      WHERE campaign_name ${inClause}
+    )
   )`
 }
