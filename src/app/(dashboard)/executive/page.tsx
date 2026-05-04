@@ -262,21 +262,61 @@ const SEGMENT_NAME_MAP: Record<string, string> = {
 async function fetchSegments() {
   try {
     if (!isConfigured()) return null
-    interface SegRow { pardot_segments: string; members: bigint | number }
-    const rows = await bqQuery<SegRow>(`
-      SELECT
-        TRIM(SPLIT(pardot_segments, ',')[OFFSET(0)]) AS pardot_segments,
-        COUNT(*) AS members
-      FROM ${t('Pardot_Prospects')}
-      WHERE pardot_segments IS NOT NULL AND pardot_segments != ''
-      GROUP BY pardot_segments
-      ORDER BY members DESC
-      LIMIT 5
-    `)
-    return rows.map(r => {
-      const code = String(r.pardot_segments)
-      return { name: SEGMENT_NAME_MAP[code] ?? code, members: Number(r.members) }
+    interface SegRow {
+      segment_name: string; members: bigint | number
+      sent: bigint | number; opens: bigint | number
+      clicks: bigint | number; bounces: bigint | number
+    }
+    interface IndRow { industry: string; cnt: bigint | number }
+
+    const [segRows, indRows] = await Promise.all([
+      bqQuery<SegRow>(`
+        SELECT
+          pp.segment_name,
+          COUNT(DISTINCT pp.id) AS members,
+          COUNTIF(ua.type = 6) AS sent,
+          COUNTIF(ua.type = 11) AS opens,
+          COUNTIF((ua.type = 1 AND ua.type_name = 'Email Tracker') OR ua.type = 17) AS clicks,
+          COUNTIF(ua.type IN (13, 36)) AS bounces
+        FROM (
+          SELECT id, TRIM(SPLIT(pardot_segments, ',')[OFFSET(0)]) AS segment_name
+          FROM ${t('Pardot_Prospects')}
+          WHERE pardot_segments IS NOT NULL
+            AND pardot_segments != ''
+            AND LOWER(TRIM(pardot_segments)) != 'nan'
+        ) pp
+        LEFT JOIN ${t('Pardot_userActivity')} ua ON ua.prospect_id = pp.id
+        GROUP BY pp.segment_name
+        HAVING COUNT(DISTINCT pp.id) > 0
+        ORDER BY members DESC
+        LIMIT 6
+      `),
+      bqQuery<IndRow>(`
+        SELECT Industry AS industry, COUNT(*) AS cnt
+        FROM ${t('Leads')}
+        WHERE Industry IS NOT NULL AND Industry != ''
+        GROUP BY Industry
+        ORDER BY cnt DESC
+        LIMIT 8
+      `),
+    ])
+
+    const segments = segRows.map(r => {
+      const sent = Number(r.sent)
+      const opens = Number(r.opens)
+      const clicks = Number(r.clicks)
+      const bounces = Number(r.bounces)
+      const delivered = Math.max(0, sent - bounces)
+      return {
+        name: String(r.segment_name),
+        members: Number(r.members),
+        openRate: pct(opens, delivered),
+        clickRate: pct(clicks, delivered),
+      }
     })
+
+    const industries = indRows.map(r => ({ name: String(r.industry), count: Number(r.cnt) }))
+    return { segments, industries }
   } catch { return null }
 }
 
@@ -311,7 +351,8 @@ export default async function ExecutivePage({
   const funnelData = liveFunnel ?? []
   const topSequences = liveTrendSeq?.topSequences ?? []
   const worstSequences = liveTrendSeq?.worstSequences ?? []
-  const topSegments = liveSegments ?? []
+  const topSegments = liveSegments?.segments ?? []
+  const topIndustries = liveSegments?.industries ?? []
   const monthlyTrend = liveTrendSeq?.monthlyData ?? []
   const weeklyTrend = liveTrendSeq?.weeklyData ?? []
   const trendChartData = liveTrendSeq?.trendData ?? []
@@ -508,13 +549,17 @@ export default async function ExecutivePage({
                   <tr className="text-white/25 text-xs font-mono">
                     <th className="text-left pb-3">Segment</th>
                     <th className="text-right pb-3">Members</th>
+                    <th className="text-right pb-3">Open Rate</th>
+                    <th className="text-right pb-3">Click Rate</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {topSegments.map((s) => (
                     <tr key={s.name} className="text-white/70">
                       <td className="py-2.5">{s.name}</td>
-                      <td className="text-right py-2.5 font-mono text-pulse-blue">{s.members?.toLocaleString() ?? '—'}</td>
+                      <td className="text-right py-2.5 font-mono">{s.members.toLocaleString()}</td>
+                      <td className="text-right py-2.5 font-mono text-pulse-blue">{s.openRate ? formatPercent(s.openRate) : '—'}</td>
+                      <td className="text-right py-2.5 font-mono">{s.clickRate ? formatPercent(s.clickRate) : '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -522,8 +567,27 @@ export default async function ExecutivePage({
             )}
           </div>
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
-            <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-4">Top Industries by MQLs</p>
-            <p className="text-white/30 text-sm">Industry breakdown available on the Segments page.</p>
+            <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-4">Top Industries</p>
+            {topIndustries.length === 0 ? (
+              <p className="text-white/30 text-sm">No industry data available.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-white/25 text-xs font-mono">
+                    <th className="text-left pb-3">Industry</th>
+                    <th className="text-right pb-3">Leads</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {topIndustries.map((ind) => (
+                    <tr key={ind.name} className="text-white/70">
+                      <td className="py-2.5">{ind.name}</td>
+                      <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.count.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
 
