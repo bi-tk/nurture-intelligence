@@ -16,8 +16,8 @@ async function fetchFunnelData(campaigns: string[]) {
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE ${sfFilter}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE ${sfFilter}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE ${sfFilter}`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE StageName = 'Closed Won'`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsClosed = FALSE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE StageName = 'Closed Won' ${sfFilter}`),
       bqCount(`
         SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
         WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)

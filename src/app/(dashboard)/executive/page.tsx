@@ -9,7 +9,6 @@ import {
   bqQuery, bqCount, bqSum, t, pct, isConfigured,
   EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
   EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR, EMAIL_SPAM_EXPR,
-  IS_EMAIL_OPEN, IS_EMAIL_CLICK,
   campaignSqlFilter, leadsCampaignFilter,
 } from '@/lib/bigquery'
 
@@ -29,9 +28,9 @@ async function fetchKpis(campaigns: string[]) {
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE ${sfFilter}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE ${sfFilter}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE ${sfFilter}`),
-      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Opportunities')} WHERE IsWon = TRUE AND IsClosed = TRUE AND Amount < 10000000`),
-      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE FORMAT_DATE('%Y-%m', DATE(CreatedDate)) = FORMAT_DATE('%Y-%m', CURRENT_DATE())`),
+      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE AND IsClosed = TRUE AND Amount < 10000000 ${sfFilter}`),
+      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsClosed = FALSE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE FORMAT_DATE('%Y-%m', DATE(CreatedDate)) = FORMAT_DATE('%Y-%m', CURRENT_DATE()) ${sfFilter}`),
     ])
 
     const activityFilter = campaignSqlFilter(campaigns, 'WHERE')
@@ -44,8 +43,8 @@ async function fetchKpis(campaigns: string[]) {
       bqQuery<EmailRow>(`
         SELECT
           ${EMAIL_SENT_EXPR} AS sent,
-          COUNT(DISTINCT IF(${IS_EMAIL_OPEN},  prospect_id, NULL)) AS unique_opens,
-          COUNT(DISTINCT IF(${IS_EMAIL_CLICK}, prospect_id, NULL)) AS unique_clicks,
+          ${EMAIL_OPEN_EXPR}  AS unique_opens,
+          ${EMAIL_CLICK_EXPR} AS unique_clicks,
           ${EMAIL_BOUNCE_EXPR} AS bounces,
           ${EMAIL_UNSUB_EXPR}  AS unsubs,
           ${EMAIL_SPAM_EXPR}   AS spam
@@ -106,8 +105,8 @@ async function fetchFunnelData(campaigns: string[]) {
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE ${sfFilter}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE ${sfFilter}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE ${sfFilter}`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsWon = TRUE AND IsClosed = TRUE`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsClosed = FALSE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE AND IsClosed = TRUE ${sfFilter}`),
       bqCount(`
         SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
         WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
