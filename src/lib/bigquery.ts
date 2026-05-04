@@ -94,13 +94,19 @@ export function campaignSqlFilter(campaigns: string[], prefix = 'AND'): string {
   return `${prefix} campaign_name IN (${sqlList(campaigns)})`
 }
 
+// Date interval filter: AND <column> >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL N DAY)
+// dateRange examples: '7d', '30d', '90d', '180d', '365d'
+export function dateIntervalFilter(dateRange: string, column: string, prefix = 'AND'): string {
+  const days = parseInt(dateRange, 10)
+  if (!days || days <= 0) return ''
+  return `${prefix} ${column} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${days} DAY)`
+}
+
 // AND fragment applied to Leads_Opp_Joined: scopes to prospects who submitted a Pardot
-// form in the given campaigns (or all NS | campaigns when none selected).
-// Excludes internal/test emails.
+// form in the given campaigns. Excludes internal/test emails.
+// When campaigns is empty, no campaign_name filter is applied.
 export function leadsCampaignFilter(campaigns: string[]): string {
-  const campaignClause = campaigns.length > 0
-    ? `AND campaign_name IN (${sqlList(campaigns)})`
-    : `AND campaign_name LIKE '%NS |%'`
+  const campaignClause = campaignSqlFilter(campaigns)
   return `AND Email IN (
     SELECT DISTINCT email
     FROM ${t('Pardot_Prospects')}
@@ -116,10 +122,10 @@ export function leadsCampaignFilter(campaigns: string[]): string {
 }
 
 // Standalone COUNT DISTINCT query for MQL: distinct emails that submitted a Pardot form.
-export function mqlCountSql(campaigns: string[]): string {
-  const campaignClause = campaigns.length > 0
-    ? `AND campaign_name IN (${sqlList(campaigns)})`
-    : `AND campaign_name LIKE '%NS |%'`
+// dateRange: '7d', '30d', etc. — filters by form submission date (created_at).
+export function mqlCountSql(campaigns: string[], dateRange = ''): string {
+  const campaignClause = campaignSqlFilter(campaigns)
+  const dateClause = dateIntervalFilter(dateRange, 'created_at')
   return `
     SELECT COUNT(DISTINCT email) AS n
     FROM ${t('Pardot_Prospects')}
@@ -130,6 +136,7 @@ export function mqlCountSql(campaigns: string[]): string {
         WHERE type = 4
           AND type_name IN ('Form', 'Form Handler')
           ${campaignClause}
+          ${dateClause}
       )
   `
 }

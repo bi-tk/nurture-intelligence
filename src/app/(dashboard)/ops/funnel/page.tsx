@@ -3,21 +3,23 @@ import Header from '@/components/layout/Header'
 import FunnelChart from '@/components/charts/FunnelChart'
 import KpiCard from '@/components/ui/KpiCard'
 import { formatPercent } from '@/lib/utils'
-import { bqCount, t, isConfigured, leadsCampaignFilter, mqlCountSql } from '@/lib/bigquery'
+import { bqCount, t, isConfigured, leadsCampaignFilter, mqlCountSql, dateIntervalFilter } from '@/lib/bigquery'
 
 export const dynamic = 'force-dynamic'
 
-async function fetchFunnelData(campaigns: string[]) {
+async function fetchFunnelData(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
     const sfFilter = leadsCampaignFilter(campaigns)
+    const leadDate = dateIntervalFilter(dateRange, 'CreatedDate')
+    const wonDate  = dateIntervalFilter(dateRange, 'CloseDate')
     const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE OQL__c = TRUE ${sfFilter}`),
-      bqCount(mqlCountSql(campaigns)),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter}`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter}`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsConverted = TRUE ${sfFilter}`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE OQL__c = TRUE ${sfFilter} ${leadDate}`),
+      bqCount(mqlCountSql(campaigns, dateRange)),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter} ${leadDate}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter} ${leadDate}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsConverted = TRUE ${sfFilter} ${leadDate}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter} ${wonDate}`),
       bqCount(`
         SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
         WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
@@ -43,14 +45,15 @@ async function fetchFunnelData(campaigns: string[]) {
 export default async function FunnelPage({
   searchParams,
 }: {
-  searchParams: Promise<{ campaign?: string | string[] }>
+  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string }>
 }) {
   const session = await auth()
   const params = await searchParams
   const campaigns = params.campaign
     ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
     : []
-  const live = await fetchFunnelData(campaigns)
+  const dateRange = params.dateRange ?? '30d'
+  const live = await fetchFunnelData(campaigns, dateRange)
   const funnelData = live?.stages ?? []
   const isLive = !!live
 
