@@ -25,10 +25,9 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
         ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)', 'WHERE')}
       `),
     ])
-    const base = nurtureTotal || 1
+    const base = engaged || 1
     const raw = [
-      { stage: 'Added to Nurture', count: nurtureTotal },
-      { stage: 'Engaged', count: engaged || Math.round(nurtureTotal * 0.38) },
+      { stage: 'Engaged', count: engaged },
       { stage: 'MQL', count: mqls },
       { stage: 'SQL', count: sqls },
       { stage: 'Discovery Call', count: discoveryCalls },
@@ -36,7 +35,7 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
       { stage: 'Won', count: wonOpps },
     ]
     return {
-      stages: raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(1)) })),
+      stages: raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(2)) })),
       nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps,
     }
   } catch { return null }

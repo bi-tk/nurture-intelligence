@@ -38,7 +38,7 @@ async function fetchKpis(campaigns: string[], dateRange: string) {
     ])
 
     const activityCampaign = campaignSqlFilter(campaigns)
-    const activityDate    = dateIntervalFilter(dateRange, 'created_at')
+    const activityDate    = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
     const activityFilter  = (activityCampaign || activityDate)
       ? `WHERE 1=1 ${activityCampaign} ${activityDate}`
       : ''
@@ -122,22 +122,22 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
         ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)', 'WHERE')}
       `),
     ])
-    const base = totalLeads || 1
+    const base = engaged || 1
     const raw = [
-      { stage: 'Added to Nurture', count: totalLeads },
-      { stage: 'Engaged', count: engaged || Math.round(totalLeads * 0.38) },
+      { stage: 'Engaged', count: engaged },
       { stage: 'MQL', count: mqls },
       { stage: 'SQL', count: sqls },
       { stage: 'Discovery Call', count: discoveryCalls },
       { stage: 'Opportunity', count: opps },
       { stage: 'Won', count: wonOpps },
     ]
-    return raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(1)) }))
+    return raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(2)) }))
   } catch { return null }
 }
 
 interface CampaignTrendRow {
   campaign_name: string
+  details: string
   period_month: string
   period_week: string
   sent: bigint | number; opens: bigint | number; clicks: bigint | number
@@ -152,11 +152,12 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
     const campaignFilter = campaigns.length > 0
       ? campaignSqlFilter(campaigns)
       : `AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')`
-    const dateFilter = dateIntervalFilter(dateRange, 'created_at')
+    const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
 
     const rows = await bqQuery<CampaignTrendRow>(`
       SELECT
         campaign_name,
+        MAX(details) AS details,
         FORMAT_DATETIME('%Y-%m', created_at) AS period_month,
         FORMAT_DATETIME('%Y-%W', created_at) AS period_week,
         ${EMAIL_SENT_EXPR}   AS sent,
@@ -179,7 +180,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
     const weekMap = new Map<string, PeriodBucket>()
 
     // Campaign-level stats for sequences
-    const campaignMap = new Map<string, { name: string; sent: number; delivered: number; opens: number; clicks: number; sentAt: string }>()
+    const campaignMap = new Map<string, { name: string; subject: string; sent: number; delivered: number; opens: number; clicks: number; sentAt: string }>()
 
     for (const r of rows) {
       const sent = Number(r.sent)
@@ -204,7 +205,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
 
       // Campaign totals
       const cName = String(r.campaign_name)
-      if (!campaignMap.has(cName)) campaignMap.set(cName, { name: cName, sent: 0, delivered: 0, opens: 0, clicks: 0, sentAt: String(r.min_created_at) })
+      if (!campaignMap.has(cName)) campaignMap.set(cName, { name: cName, subject: String(r.details ?? ''), sent: 0, delivered: 0, opens: 0, clicks: 0, sentAt: String(r.min_created_at) })
       const c = campaignMap.get(cName)!
       c.sent += sent; c.delivered += delivered; c.opens += opens; c.clicks += clicks
     }
@@ -224,37 +225,130 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
       month: m.label, openRate: pct(m.opens, m.delivered), mqls: 0,
     }))
 
-    const sequences = [...campaignMap.values()]
+    const allSequences = [...campaignMap.values()]
       .filter(c => c.sent >= 10)
       .map(c => ({
         name: c.name,
+        subject: c.subject || c.name,
         openRate: pct(c.opens, c.delivered),
         clickRate: pct(c.clicks, c.delivered),
       }))
-      .sort((a, b) => b.openRate - a.openRate)
 
-    const topSequences = sequences.slice(0, 3).map(s => ({ name: s.name, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
-    const worstSequences = sequences.slice(-3).reverse().map(s => ({ name: s.name, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
+    // Deduplicate by subject — keep the entry with the highest open rate per unique subject
+    const subjectMap = new Map<string, typeof allSequences[0]>()
+    for (const s of allSequences) {
+      const existing = subjectMap.get(s.subject)
+      if (!existing || s.openRate > existing.openRate) subjectMap.set(s.subject, s)
+    }
+    const sequences = [...subjectMap.values()].sort((a, b) => b.openRate - a.openRate)
+
+    const topSequences = sequences.slice(0, 3).map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
+    const worstSequences = sequences.slice(-3).reverse().map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
 
     return { monthlyData, weeklyData, trendData, topSequences, worstSequences }
   } catch { return null }
 }
 
-async function fetchSegments() {
+const SEGMENT_NAME_MAP: Record<string, string> = {
+  CIO_NT_MM: 'CIOs & Tech Leaders | Non-Tech | $50–$500M',
+  CEO_NT: 'CEOs & Non-Tech Leaders | Non-Tech',
+  CEO_T_U50: 'CEOs & Non-Tech Leaders | Tech | Under $50M',
+  CTO_T_U50: 'CTOs & Tech Leaders | Tech | Under $50M',
+  CTO_FTS: 'CTOs & Tech Leaders | Funded Tech Startups',
+  PE_MP: 'Managing Partners | Private Equity',
+  CIO_NT_U50: 'CIOs & Tech Leaders | Non-Tech | Under $50M new',
+}
+
+async function fetchSegments(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
-    interface SegRow { pardot_segments: string; members: bigint | number }
-    const rows = await bqQuery<SegRow>(`
-      SELECT
-        TRIM(SPLIT(pardot_segments, ',')[OFFSET(0)]) AS pardot_segments,
-        COUNT(*) AS members
-      FROM ${t('Pardot_Prospects')}
-      WHERE pardot_segments IS NOT NULL AND pardot_segments != ''
-      GROUP BY pardot_segments
-      ORDER BY members DESC
-      LIMIT 5
-    `)
-    return rows.map(r => ({ name: String(r.pardot_segments), openRate: 0, clickRate: 0, mqlRate: 0 }))
+
+    const leadDate = dateIntervalFilter(dateRange, 'CreatedDate')
+    const sfFilter = leadsCampaignFilter(campaigns)
+
+    interface SegRow {
+      segment_name: string; members: bigint | number
+      sent: bigint | number; opens: bigint | number
+      clicks: bigint | number; bounces: bigint | number
+    }
+    interface IndRow {
+      industry: string
+      mqls: bigint | number; sqls: bigint | number
+      discovery_calls: bigint | number; opportunities: bigint | number; won: bigint | number
+    }
+
+    const uaCampaign = campaigns.length > 0
+      ? `AND ua.campaign_name IN (${campaigns.map(c => `'${c.replace(/'/g, "''")}'`).join(', ')})`
+      : ''
+    const uaDate = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
+
+    const [segRows, indRows] = await Promise.all([
+      bqQuery<SegRow>(`
+        SELECT
+          pp.segment_name,
+          COUNT(DISTINCT pp.id) AS members,
+          COUNTIF(ua.type = 6) AS sent,
+          COUNTIF(ua.type = 11) AS opens,
+          COUNTIF((ua.type = 1 AND ua.type_name = 'Email Tracker') OR ua.type = 17) AS clicks,
+          COUNTIF(ua.type IN (13, 36)) AS bounces
+        FROM (
+          SELECT id, TRIM(SPLIT(pardot_segments, ',')[OFFSET(0)]) AS segment_name
+          FROM ${t('Pardot_Prospects')}
+          WHERE pardot_segments IS NOT NULL
+            AND pardot_segments != ''
+            AND LOWER(TRIM(pardot_segments)) != 'nan'
+        ) pp
+        LEFT JOIN ${t('Pardot_userActivity')} ua
+          ON ua.prospect_id = pp.id
+          ${uaCampaign}
+          ${uaDate}
+        GROUP BY pp.segment_name
+        HAVING COUNT(DISTINCT pp.id) > 0
+        ORDER BY members DESC
+        LIMIT 6
+      `),
+      bqQuery<IndRow>(`
+        SELECT
+          Industry AS industry,
+          COUNT(DISTINCT Email) AS mqls,
+          COUNT(DISTINCT CASE WHEN SQL__c = TRUE THEN Email END) AS sqls,
+          COUNT(DISTINCT CASE WHEN Discovery_Call__c = TRUE THEN Email END) AS discovery_calls,
+          COUNT(DISTINCT CASE WHEN IsConverted = TRUE THEN Email END) AS opportunities,
+          COUNT(DISTINCT CASE WHEN IsWon = TRUE THEN Email END) AS won
+        FROM ${t('Leads_Opp_Joined')}
+        WHERE Industry IS NOT NULL AND Industry != ''
+          AND Industry NOT IN ('Other', 'No Match')
+          ${sfFilter}
+          ${leadDate}
+        GROUP BY Industry
+        ORDER BY mqls DESC, sqls DESC
+        LIMIT 8
+      `),
+    ])
+
+    const segments = segRows.map(r => {
+      const sent = Number(r.sent)
+      const opens = Number(r.opens)
+      const clicks = Number(r.clicks)
+      const bounces = Number(r.bounces)
+      const delivered = Math.max(0, sent - bounces)
+      return {
+        name: String(r.segment_name),
+        members: Number(r.members),
+        openRate: pct(opens, delivered),
+        clickRate: pct(clicks, delivered),
+      }
+    })
+
+    const industries = indRows.map(r => ({
+      name: String(r.industry),
+      mqls: Number(r.mqls),
+      sqls: Number(r.sqls),
+      discoveryCalls: Number(r.discovery_calls),
+      opportunities: Number(r.opportunities),
+      won: Number(r.won),
+    }))
+    return { segments, industries }
   } catch { return null }
 }
 
@@ -274,7 +368,7 @@ export default async function ExecutivePage({
 
   const [liveKpi, liveFunnel, liveTrendSeq, liveSegments] = await Promise.all([
     fetchKpis(campaigns, dateRange), fetchFunnelData(campaigns, dateRange),
-    fetchTrendAndSequences(campaigns, dateRange), fetchSegments(),
+    fetchTrendAndSequences(campaigns, dateRange), fetchSegments(campaigns, dateRange),
   ])
 
   const zeroKpi = {
@@ -289,7 +383,8 @@ export default async function ExecutivePage({
   const funnelData = liveFunnel ?? []
   const topSequences = liveTrendSeq?.topSequences ?? []
   const worstSequences = liveTrendSeq?.worstSequences ?? []
-  const topSegments = liveSegments ?? []
+  const topSegments = liveSegments?.segments ?? []
+  const topIndustries = liveSegments?.industries ?? []
   const monthlyTrend = liveTrendSeq?.monthlyData ?? []
   const weeklyTrend = liveTrendSeq?.weeklyData ?? []
   const trendChartData = liveTrendSeq?.trendData ?? []
@@ -441,12 +536,13 @@ export default async function ExecutivePage({
             ) : (
               <div className="space-y-3">
                 {topSequences.map((s) => (
-                  <div key={s.name} className="flex items-center justify-between">
-                    <div>
-                      <p className="text-white text-sm font-medium truncate max-w-[240px]">{s.name}</p>
+                  <div key={s.name} className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-white text-sm font-medium truncate">{s.subject}</p>
+                      <p className="text-white/30 text-xs truncate mt-0.5">{s.name}</p>
                       <p className="text-white/30 text-xs font-mono mt-0.5">Open {s.mqlRate}% · Click {s.sqlRate}%</p>
                     </div>
-                    <p className="text-accent-green text-sm font-mono font-medium">{s.wonRevenue ? formatCurrency(s.wonRevenue) : '—'}</p>
+                    <p className="text-accent-green text-sm font-mono font-medium shrink-0">{s.wonRevenue ? formatCurrency(s.wonRevenue) : '—'}</p>
                   </div>
                 ))}
               </div>
@@ -459,9 +555,10 @@ export default async function ExecutivePage({
             ) : (
               <div className="space-y-3">
                 {worstSequences.map((s) => (
-                  <div key={s.name} className="flex items-center justify-between">
-                    <div>
-                      <p className="text-white text-sm font-medium truncate max-w-[240px]">{s.name}</p>
+                  <div key={s.name} className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-white text-sm font-medium truncate">{s.subject}</p>
+                      <p className="text-white/30 text-xs truncate mt-0.5">{s.name}</p>
                       <p className="text-white/30 text-xs font-mono mt-0.5">Open {s.mqlRate}% · Click {s.sqlRate}%</p>
                     </div>
                     <p className="text-accent-red text-sm font-mono font-medium">{s.wonRevenue ? formatCurrency(s.wonRevenue) : '—'}</p>
@@ -483,18 +580,18 @@ export default async function ExecutivePage({
                 <thead>
                   <tr className="text-white/25 text-xs font-mono">
                     <th className="text-left pb-3">Segment</th>
+                    <th className="text-right pb-3">Members</th>
                     <th className="text-right pb-3">Open Rate</th>
                     <th className="text-right pb-3">Click Rate</th>
-                    <th className="text-right pb-3">MQL Rate</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {topSegments.map((s) => (
                     <tr key={s.name} className="text-white/70">
                       <td className="py-2.5">{s.name}</td>
-                      <td className="text-right py-2.5 font-mono">{s.openRate ? formatPercent(s.openRate) : '—'}</td>
+                      <td className="text-right py-2.5 font-mono">{s.members.toLocaleString()}</td>
+                      <td className="text-right py-2.5 font-mono text-pulse-blue">{s.openRate ? formatPercent(s.openRate) : '—'}</td>
                       <td className="text-right py-2.5 font-mono">{s.clickRate ? formatPercent(s.clickRate) : '—'}</td>
-                      <td className="text-right py-2.5 font-mono text-pulse-blue">{s.mqlRate ? formatPercent(s.mqlRate) : '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -502,8 +599,35 @@ export default async function ExecutivePage({
             )}
           </div>
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
-            <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-4">Top Industries by MQLs</p>
-            <p className="text-white/30 text-sm">Industry breakdown available on the Segments page.</p>
+            <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-4">Top Industries</p>
+            {topIndustries.length === 0 ? (
+              <p className="text-white/30 text-sm">No industry data available.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-white/25 text-xs font-mono">
+                    <th className="text-left pb-3">Industry</th>
+                    <th className="text-right pb-3">MQL</th>
+                    <th className="text-right pb-3">SQL</th>
+                    <th className="text-right pb-3">DC</th>
+                    <th className="text-right pb-3">Opp</th>
+                    <th className="text-right pb-3">Won</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {topIndustries.map((ind) => (
+                    <tr key={ind.name} className="text-white/70">
+                      <td className="py-2.5">{ind.name}</td>
+                      <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.mqls}</td>
+                      <td className="text-right py-2.5 font-mono">{ind.sqls}</td>
+                      <td className="text-right py-2.5 font-mono">{ind.discoveryCalls}</td>
+                      <td className="text-right py-2.5 font-mono">{ind.opportunities}</td>
+                      <td className="text-right py-2.5 font-mono text-accent-green">{ind.won}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
 

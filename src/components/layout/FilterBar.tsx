@@ -22,13 +22,108 @@ const NURTURE_SEGMENTS = [
   'CEOs and Non-Tech Leaders of Tech Businesses',
 ]
 
-const DATE_OPTIONS = [
+const DATE_PRESETS = [
   { value: '7d',   label: 'Last 7 days'    },
   { value: '30d',  label: 'Last 30 days'   },
+  { value: '60d',  label: 'Last 60 days'   },
   { value: '90d',  label: 'Last 90 days'   },
   { value: '180d', label: 'Last 6 months'  },
   { value: '365d', label: 'Last 12 months' },
 ]
+
+function DateRangeFilter({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onMouseDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [])
+
+  function displayLabel() {
+    if (value.includes('_')) {
+      const [from, to] = value.split('_')
+      return `${from} – ${to}`
+    }
+    return DATE_PRESETS.find(p => p.value === value)?.label ?? value
+  }
+
+  function applyCustom() {
+    if (fromDate && toDate) {
+      onChange(`${fromDate}_${toDate}`)
+      setOpen(false)
+    }
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="bg-graphite-800 border border-white/10 text-white/60 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-pulse-blue/40 cursor-pointer flex items-center gap-1.5"
+      >
+        <svg className="w-3 h-3 shrink-0 opacity-50" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M17 12h-5v5h5v-5zM16 1v2H8V1H6v2H5c-1.11 0-2 .89-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.11-.89-2-2-2h-1V1h-2zm3 18H5V8h14v11z"/>
+        </svg>
+        <span>{displayLabel()}</span>
+        <svg className="w-3 h-3 shrink-0 opacity-50" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M7 10l5 5 5-5z" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute top-full mt-1 left-0 z-[200] bg-graphite-800 border border-white/10 rounded-lg shadow-xl p-3 min-w-[230px]">
+          <p className="text-white/25 text-xs font-mono uppercase tracking-widest mb-2">Quick Select</p>
+          <div className="grid grid-cols-2 gap-1 mb-3">
+            {DATE_PRESETS.map(p => (
+              <button
+                key={p.value}
+                onClick={() => { onChange(p.value); setOpen(false) }}
+                className={`text-xs px-2 py-1.5 rounded-md text-left transition-colors ${value === p.value ? 'bg-pulse-blue text-white' : 'text-white/50 hover:bg-white/5 hover:text-white/80'}`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="border-t border-white/5 pt-3">
+            <p className="text-white/25 text-xs font-mono uppercase tracking-widest mb-2">Custom Range</p>
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-1">
+                <span className="text-white/30 text-xs">From</span>
+                <input
+                  type="date"
+                  value={fromDate}
+                  onChange={e => setFromDate(e.target.value)}
+                  className="bg-graphite-700 border border-white/10 text-white/60 text-xs rounded px-2 py-1.5 focus:outline-none focus:border-pulse-blue/40 w-full"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-white/30 text-xs">To</span>
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={e => setToDate(e.target.value)}
+                  className="bg-graphite-700 border border-white/10 text-white/60 text-xs rounded px-2 py-1.5 focus:outline-none focus:border-pulse-blue/40 w-full"
+                />
+              </div>
+              <button
+                onClick={applyCustom}
+                disabled={!fromDate || !toDate}
+                className="text-xs bg-pulse-blue text-white rounded px-3 py-1.5 disabled:opacity-30 hover:bg-pulse-blue/80 transition-colors mt-1"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function CampaignMultiSelect({
   campaigns,
@@ -72,7 +167,7 @@ function CampaignMultiSelect({
       </button>
 
       {open && (
-        <div className="absolute top-full mt-1 left-0 z-50 bg-graphite-800 border border-white/10 rounded-lg shadow-xl min-w-[260px] max-h-64 overflow-y-auto">
+        <div className="absolute top-full mt-1 left-0 z-[200] bg-graphite-800 border border-white/10 rounded-lg shadow-xl min-w-[260px] max-h-64 overflow-y-auto">
           {campaigns.length === 0 ? (
             <p className="text-white/30 text-xs px-3 py-2">Loading…</p>
           ) : (
@@ -133,17 +228,9 @@ export default function FilterBar() {
   }
 
   return (
-    <div className="flex items-center gap-3 px-5 py-2 border-b border-white/5 bg-graphite-900/80 backdrop-blur-sm shrink-0">
+    <div className="relative z-40 flex items-center gap-3 px-5 py-2 border-b border-white/5 bg-graphite-900/80 backdrop-blur-sm shrink-0">
       <p className="text-white/20 text-xs font-mono uppercase tracking-widest shrink-0">Filters</p>
-      <select
-        value={dateRange}
-        onChange={e => updateFilter('dateRange', e.target.value)}
-        className="bg-graphite-800 border border-white/10 text-white/60 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-pulse-blue/40 cursor-pointer"
-      >
-        {DATE_OPTIONS.map(o => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-      </select>
+      <DateRangeFilter value={dateRange} onChange={v => updateFilter('dateRange', v)} />
       <select
         value={segment}
         onChange={e => updateFilter('segment', e.target.value)}
