@@ -4,7 +4,7 @@ import {
   bqQuery, t, pct, isConfigured,
   EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
   EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR,
-  campaignSqlFilter,
+  campaignSqlFilter, dateIntervalFilter,
 } from '@/lib/bigquery'
 import SegmentTables from '@/components/tables/SegmentTables'
 
@@ -57,7 +57,7 @@ interface CampaignRow {
 interface MemberCountRow { code: string; members: bigint | number }
 interface IndustryRow { Industry: string; cnt: bigint | number }
 
-async function getSegmentsData(campaigns: string[]) {
+async function getSegmentsData(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) {
       return {
@@ -84,6 +84,7 @@ async function getSegmentsData(campaigns: string[]) {
         FROM ${t('Pardot_userActivity')}
         WHERE campaign_name IS NOT NULL AND campaign_name != ''
           ${campaignFilter}
+          ${dateIntervalFilter(dateRange, 'created_at')}
         GROUP BY campaign_name
         HAVING ${EMAIL_SENT_EXPR} >= 10
       `),
@@ -159,14 +160,15 @@ async function getSegmentsData(campaigns: string[]) {
 export default async function SegmentsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ campaign?: string | string[] }>
+  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string }>
 }) {
   const session = await auth()
   const params = await searchParams
   const campaigns = params.campaign
     ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
     : []
-  const data = await getSegmentsData(campaigns)
+  const dateRange = params.dateRange ?? '30d'
+  const data = await getSegmentsData(campaigns, dateRange)
   const isLive = data.pardotConnected || data.sfConnected
 
   return (

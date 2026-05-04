@@ -9,7 +9,7 @@ import {
   bqQuery, bqCount, bqSum, t, pct, isConfigured,
   EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
   EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR, EMAIL_SPAM_EXPR,
-  campaignSqlFilter, leadsCampaignFilter, mqlCountSql,
+  campaignSqlFilter, leadsCampaignFilter, mqlCountSql, dateIntervalFilter,
 } from '@/lib/bigquery'
 
 export const dynamic = 'force-dynamic'
@@ -18,22 +18,30 @@ const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'
 
 // ─── Fetch helpers ────────────────────────────────────────────────────────────
 
-async function fetchKpis(campaigns: string[]) {
+async function fetchKpis(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
 
     const sfFilter = leadsCampaignFilter(campaigns)
+    const leadDate  = dateIntervalFilter(dateRange, 'CreatedDate')
+    const wonDate   = dateIntervalFilter(dateRange, 'CloseDate')
+    const pipeDate  = dateIntervalFilter(dateRange, 'CreatedDate_opp')
 
-    const [mqlCount, sqlCount, discoveryCount, wonRevenue, pipelineValue, opportunitiesCreated] = await Promise.all([
-      bqCount(mqlCountSql(campaigns)),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter}`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter}`),
-      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter}`),
-      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsClosed = FALSE ${sfFilter}`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsConverted = TRUE ${sfFilter}`),
+    const [mqlCount, sqlCount, discoveryCount, wonRevenue, pipelineValue, opportunitiesCreated, wonOpportunities] = await Promise.all([
+      bqCount(mqlCountSql(campaigns, dateRange)),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter} ${leadDate}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter} ${leadDate}`),
+      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter} ${wonDate}`),
+      bqSum(`SELECT SUM(Amount) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsClosed = FALSE ${sfFilter} ${pipeDate}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsConverted = TRUE ${sfFilter} ${leadDate}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter} ${wonDate}`),
     ])
 
-    const activityFilter = campaignSqlFilter(campaigns, 'WHERE')
+    const activityCampaign = campaignSqlFilter(campaigns)
+    const activityDate    = dateIntervalFilter(dateRange, 'created_at')
+    const activityFilter  = (activityCampaign || activityDate)
+      ? `WHERE 1=1 ${activityCampaign} ${activityDate}`
+      : ''
 
     interface EmailRow {
       sent: bigint | number; unique_opens: bigint | number; unique_clicks: bigint | number
@@ -54,7 +62,7 @@ async function fetchKpis(campaigns: string[]) {
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}`),
       bqCount(`
         SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
-        WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+        ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)', 'WHERE')}
       `),
     ])
 
@@ -72,7 +80,7 @@ async function fetchKpis(campaigns: string[]) {
 
     return {
       wonRevenue, pipelineValue,
-      wonOpportunities: 0, opportunitiesCreated,
+      wonOpportunities, opportunitiesCreated,
       mqls: mqlCount, sqls: sqlCount, discoveryCalls: discoveryCount,
       engagedAudience: prospectsOpenedAny,
       engagedRate: pct(prospectsOpenedAny, totalAudience),
@@ -96,20 +104,22 @@ async function fetchKpis(campaigns: string[]) {
   } catch { return null }
 }
 
-async function fetchFunnelData(campaigns: string[]) {
+async function fetchFunnelData(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
     const sfFilter = leadsCampaignFilter(campaigns)
+    const leadDate = dateIntervalFilter(dateRange, 'CreatedDate')
+    const wonDate  = dateIntervalFilter(dateRange, 'CloseDate')
     const [totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Marketing_nurture__c = TRUE ${sfFilter}`),
-      bqCount(mqlCountSql(campaigns)),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter}`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter}`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsConverted = TRUE ${sfFilter}`),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Marketing_nurture__c = TRUE ${sfFilter} ${leadDate}`),
+      bqCount(mqlCountSql(campaigns, dateRange)),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter} ${leadDate}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter} ${leadDate}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsConverted = TRUE ${sfFilter} ${leadDate}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter} ${wonDate}`),
       bqCount(`
         SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
-        WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+        ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)', 'WHERE')}
       `),
     ])
     const base = totalLeads || 1
@@ -135,13 +145,14 @@ interface CampaignTrendRow {
   min_created_at: string
 }
 
-async function fetchTrendAndSequences(campaigns: string[]) {
+async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
 
     const campaignFilter = campaigns.length > 0
       ? campaignSqlFilter(campaigns)
       : `AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')`
+    const dateFilter = dateIntervalFilter(dateRange, 'created_at')
 
     const rows = await bqQuery<CampaignTrendRow>(`
       SELECT
@@ -157,6 +168,7 @@ async function fetchTrendAndSequences(campaigns: string[]) {
       FROM ${t('Pardot_userActivity')}
       WHERE campaign_name IS NOT NULL AND campaign_name != ''
         ${campaignFilter}
+        ${dateFilter}
       GROUP BY campaign_name, period_month, period_week
       HAVING ${EMAIL_SENT_EXPR} >= 5
     `)
@@ -251,16 +263,18 @@ async function fetchSegments() {
 export default async function ExecutivePage({
   searchParams,
 }: {
-  searchParams: Promise<{ campaign?: string | string[] }>
+  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string }>
 }) {
   const session = await auth()
   const params = await searchParams
   const campaigns = params.campaign
     ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
     : []
+  const dateRange = params.dateRange ?? '30d'
 
   const [liveKpi, liveFunnel, liveTrendSeq, liveSegments] = await Promise.all([
-    fetchKpis(campaigns), fetchFunnelData(campaigns), fetchTrendAndSequences(campaigns), fetchSegments(),
+    fetchKpis(campaigns, dateRange), fetchFunnelData(campaigns, dateRange),
+    fetchTrendAndSequences(campaigns, dateRange), fetchSegments(),
   ])
 
   const zeroKpi = {
