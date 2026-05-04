@@ -9,7 +9,6 @@ import {
   bqQuery, bqCount, bqSum, t, pct, isConfigured,
   EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
   EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR, EMAIL_SPAM_EXPR,
-  IS_EMAIL_OPEN, IS_EMAIL_CLICK,
   campaignSqlFilter, leadsCampaignFilter,
 } from '@/lib/bigquery'
 
@@ -44,8 +43,8 @@ async function fetchKpis(campaigns: string[]) {
       bqQuery<EmailRow>(`
         SELECT
           ${EMAIL_SENT_EXPR} AS sent,
-          COUNT(DISTINCT IF(${IS_EMAIL_OPEN},  prospect_id, NULL)) AS unique_opens,
-          COUNT(DISTINCT IF(${IS_EMAIL_CLICK}, prospect_id, NULL)) AS unique_clicks,
+          ${EMAIL_OPEN_EXPR}  AS unique_opens,
+          ${EMAIL_CLICK_EXPR} AS unique_clicks,
           ${EMAIL_BOUNCE_EXPR} AS bounces,
           ${EMAIL_UNSUB_EXPR}  AS unsubs,
           ${EMAIL_SPAM_EXPR}   AS spam
