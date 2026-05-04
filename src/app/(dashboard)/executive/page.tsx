@@ -225,7 +225,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
       month: m.label, openRate: pct(m.opens, m.delivered), mqls: 0,
     }))
 
-    const sequences = [...campaignMap.values()]
+    const allSequences = [...campaignMap.values()]
       .filter(c => c.sent >= 10)
       .map(c => ({
         name: c.name,
@@ -233,7 +233,14 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
         openRate: pct(c.opens, c.delivered),
         clickRate: pct(c.clicks, c.delivered),
       }))
-      .sort((a, b) => b.openRate - a.openRate)
+
+    // Deduplicate by subject — keep the entry with the highest open rate per unique subject
+    const subjectMap = new Map<string, typeof allSequences[0]>()
+    for (const s of allSequences) {
+      const existing = subjectMap.get(s.subject)
+      if (!existing || s.openRate > existing.openRate) subjectMap.set(s.subject, s)
+    }
+    const sequences = [...subjectMap.values()].sort((a, b) => b.openRate - a.openRate)
 
     const topSequences = sequences.slice(0, 3).map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
     const worstSequences = sequences.slice(-3).reverse().map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
