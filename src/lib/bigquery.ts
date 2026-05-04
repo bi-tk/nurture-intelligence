@@ -94,9 +94,14 @@ export function campaignSqlFilter(campaigns: string[], prefix = 'AND'): string {
   return `${prefix} campaign_name IN (${sqlList(campaigns)})`
 }
 
-// Date interval filter: AND <column> >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL N DAY)
-// dateRange examples: '7d', '30d', '90d', '180d', '365d'
+// Date interval filter.
+// dateRange examples: '7d', '30d', '90d' — or a custom range 'YYYY-MM-DD_YYYY-MM-DD'
 export function dateIntervalFilter(dateRange: string, column: string, prefix = 'AND'): string {
+  if (dateRange.includes('_')) {
+    const [from, to] = dateRange.split('_')
+    if (!from || !to) return ''
+    return `${prefix} ${column} >= TIMESTAMP('${from}') AND ${column} <= TIMESTAMP('${to} 23:59:59')`
+  }
   const days = parseInt(dateRange, 10)
   if (!days || days <= 0) return ''
   return `${prefix} ${column} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${days} DAY)`
