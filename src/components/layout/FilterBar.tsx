@@ -72,7 +72,7 @@ function CampaignMultiSelect({
       </button>
 
       {open && (
-        <div className="absolute top-full mt-1 left-0 z-50 bg-graphite-800 border border-white/10 rounded-lg shadow-xl min-w-[260px] max-h-64 overflow-y-auto">
+        <div className="absolute top-full mt-1 left-0 z-[200] bg-graphite-800 border border-white/10 rounded-lg shadow-xl min-w-[260px] max-h-64 overflow-y-auto">
           {campaigns.length === 0 ? (
             <p className="text-white/30 text-xs px-3 py-2">Loading…</p>
           ) : (
@@ -133,7 +133,7 @@ export default function FilterBar() {
   }
 
   return (
-    <div className="flex items-center gap-3 px-5 py-2 border-b border-white/5 bg-graphite-900/80 backdrop-blur-sm shrink-0">
+    <div className="relative z-40 flex items-center gap-3 px-5 py-2 border-b border-white/5 bg-graphite-900/80 backdrop-blur-sm shrink-0">
       <p className="text-white/20 text-xs font-mono uppercase tracking-widest shrink-0">Filters</p>
       <select
         value={dateRange}
