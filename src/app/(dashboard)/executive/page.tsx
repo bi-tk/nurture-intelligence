@@ -137,6 +137,7 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
 
 interface CampaignTrendRow {
   campaign_name: string
+  details: string
   period_month: string
   period_week: string
   sent: bigint | number; opens: bigint | number; clicks: bigint | number
@@ -156,6 +157,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
     const rows = await bqQuery<CampaignTrendRow>(`
       SELECT
         campaign_name,
+        MAX(details) AS details,
         FORMAT_DATETIME('%Y-%m', created_at) AS period_month,
         FORMAT_DATETIME('%Y-%W', created_at) AS period_week,
         ${EMAIL_SENT_EXPR}   AS sent,
@@ -178,7 +180,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
     const weekMap = new Map<string, PeriodBucket>()
 
     // Campaign-level stats for sequences
-    const campaignMap = new Map<string, { name: string; sent: number; delivered: number; opens: number; clicks: number; sentAt: string }>()
+    const campaignMap = new Map<string, { name: string; subject: string; sent: number; delivered: number; opens: number; clicks: number; sentAt: string }>()
 
     for (const r of rows) {
       const sent = Number(r.sent)
@@ -203,7 +205,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
 
       // Campaign totals
       const cName = String(r.campaign_name)
-      if (!campaignMap.has(cName)) campaignMap.set(cName, { name: cName, sent: 0, delivered: 0, opens: 0, clicks: 0, sentAt: String(r.min_created_at) })
+      if (!campaignMap.has(cName)) campaignMap.set(cName, { name: cName, subject: String(r.details ?? ''), sent: 0, delivered: 0, opens: 0, clicks: 0, sentAt: String(r.min_created_at) })
       const c = campaignMap.get(cName)!
       c.sent += sent; c.delivered += delivered; c.opens += opens; c.clicks += clicks
     }
@@ -225,16 +227,12 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
 
     const sequences = [...campaignMap.values()]
       .filter(c => c.sent >= 10)
-      .map(c => {
-        const parts = c.name.split(' | ')
-        const subject = parts[parts.length - 1]?.trim() || c.name
-        return {
-          name: c.name,
-          subject,
-          openRate: pct(c.opens, c.delivered),
-          clickRate: pct(c.clicks, c.delivered),
-        }
-      })
+      .map(c => ({
+        name: c.name,
+        subject: c.subject || c.name,
+        openRate: pct(c.opens, c.delivered),
+        clickRate: pct(c.clicks, c.delivered),
+      }))
       .sort((a, b) => b.openRate - a.openRate)
 
     const topSequences = sequences.slice(0, 3).map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))

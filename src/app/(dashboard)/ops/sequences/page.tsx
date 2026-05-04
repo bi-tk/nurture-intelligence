@@ -58,6 +58,7 @@ async function getSignalThresholds() {
 
 interface CampaignRow {
   campaign_name: string
+  details: string
   sent: bigint | number; opens: bigint | number; clicks: bigint | number
   bounces: bigint | number; unsubs: bigint | number; spam: bigint | number
   min_created_at: string
@@ -82,6 +83,7 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
       bqQuery<CampaignRow>(`
         SELECT
           campaign_name,
+          MAX(details) AS details,
           ${EMAIL_SENT_EXPR}   AS sent,
           ${EMAIL_OPEN_EXPR}   AS opens,
           ${EMAIL_CLICK_EXPR}  AS clicks,
@@ -132,7 +134,7 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
       return {
         id: undefined as number | undefined,
         name: r.campaign_name,
-        subject: r.campaign_name,
+        subject: String(r.details ?? '') || r.campaign_name,
         segmentCode,
         segment: SEGMENT_NAME_MAP[segmentCode] ?? segmentCode,
         emailNumber: extractEmailNumber(r.campaign_name),
