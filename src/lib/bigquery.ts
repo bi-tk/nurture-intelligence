@@ -94,20 +94,42 @@ export function campaignSqlFilter(campaigns: string[], prefix = 'AND'): string {
   return `${prefix} campaign_name IN (${sqlList(campaigns)})`
 }
 
-// AND fragment to filter Salesforce rows to those whose email appeared in the given campaigns.
-// Uses the pattern: email IN (SELECT email FROM Pardot_Prospects WHERE id IN (SELECT prospect_id FROM Pardot_userActivity WHERE campaign_name IN (...)))
+// AND fragment applied to Leads_Opp_Joined: scopes to prospects who submitted a Pardot
+// form in the given campaigns (or all NS | campaigns when none selected).
+// Excludes internal/test emails.
 export function leadsCampaignFilter(campaigns: string[]): string {
-  if (campaigns.length === 0) return ''
-  const inClause = campaigns.length === 1
-    ? `= '${campaigns[0].replace(/'/g, "''")}'`
-    : `IN (${sqlList(campaigns)})`
-  return `AND email IN (
+  const campaignClause = campaigns.length > 0
+    ? `AND campaign_name IN (${sqlList(campaigns)})`
+    : `AND campaign_name LIKE '%NS |%'`
+  return `AND Email IN (
     SELECT DISTINCT email
     FROM ${t('Pardot_Prospects')}
-    WHERE id IN (
-      SELECT DISTINCT prospect_id
-      FROM ${t('Pardot_userActivity')}
-      WHERE campaign_name ${inClause}
-    )
+    WHERE NOT REGEXP_CONTAINS(LOWER(email), r'test|tkxel|work|uzair|sami')
+      AND id IN (
+        SELECT DISTINCT prospect_id
+        FROM ${t('Pardot_userActivity')}
+        WHERE type = 4
+          AND type_name IN ('Form', 'Form Handler')
+          ${campaignClause}
+      )
   )`
+}
+
+// Standalone COUNT DISTINCT query for MQL: distinct emails that submitted a Pardot form.
+export function mqlCountSql(campaigns: string[]): string {
+  const campaignClause = campaigns.length > 0
+    ? `AND campaign_name IN (${sqlList(campaigns)})`
+    : `AND campaign_name LIKE '%NS |%'`
+  return `
+    SELECT COUNT(DISTINCT email) AS n
+    FROM ${t('Pardot_Prospects')}
+    WHERE NOT REGEXP_CONTAINS(LOWER(email), r'test|tkxel|work|uzair|sami')
+      AND id IN (
+        SELECT DISTINCT prospect_id
+        FROM ${t('Pardot_userActivity')}
+        WHERE type = 4
+          AND type_name IN ('Form', 'Form Handler')
+          ${campaignClause}
+      )
+  `
 }

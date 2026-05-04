@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { bqCount, t, isConfigured } from '@/lib/bigquery'
+import { bqCount, t, isConfigured, leadsCampaignFilter, mqlCountSql } from '@/lib/bigquery'
 
 export async function GET() {
   if (!isConfigured()) {
@@ -10,13 +10,15 @@ export async function GET() {
     })
   }
 
+  const sfFilter = leadsCampaignFilter([])
+
   const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
-    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE OQL__c = TRUE`),
-    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE MQL_Response__c = TRUE`),
-    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE SQL__c = TRUE`),
-    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads')} WHERE Discovery_Call__c = TRUE`),
-    bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE IsClosed = FALSE`),
-    bqCount(`SELECT COUNT(*) AS n FROM ${t('Opportunities')} WHERE StageName = 'Closed Won'`),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE OQL__c = TRUE ${sfFilter}`),
+    bqCount(mqlCountSql([])),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter}`),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter}`),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsConverted = TRUE ${sfFilter}`),
+    bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter}`),
     bqCount(`
       SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
       WHERE SAFE_CAST(last_activity_at AS TIMESTAMP) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
@@ -26,12 +28,12 @@ export async function GET() {
   const base = nurtureTotal || 1
   const stages = [
     { stage: 'Added to Nurture', count: nurtureTotal },
-    { stage: 'Engaged', count: engaged || Math.round(nurtureTotal * 0.38) },
-    { stage: 'MQL', count: mqls },
-    { stage: 'SQL', count: sqls },
-    { stage: 'Discovery Call', count: discoveryCalls },
-    { stage: 'Opportunity', count: opps },
-    { stage: 'Won', count: wonOpps },
+    { stage: 'Engaged',          count: engaged || Math.round(nurtureTotal * 0.38) },
+    { stage: 'MQL',              count: mqls },
+    { stage: 'SQL',              count: sqls },
+    { stage: 'Discovery Call',   count: discoveryCalls },
+    { stage: 'Opportunity',      count: opps },
+    { stage: 'Won',              count: wonOpps },
   ].map((s, i, arr) => ({
     ...s,
     rate: i === 0 ? 100 : parseFloat(((s.count / base) * 100).toFixed(1)),
