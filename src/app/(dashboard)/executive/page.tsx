@@ -263,13 +263,8 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
 
-    const uaCampaign = campaigns.length > 0
-      ? `AND ua.campaign_name IN (${campaigns.map(c => `'${c.replace(/'/g, "''")}'`).join(', ')})`
-      : ''
-    const uaDate = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
     const leadDate = dateIntervalFilter(dateRange, 'CreatedDate')
-    const mqlCampaign = campaignSqlFilter(campaigns)
-    const mqlDate = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
+    const sfFilter = leadsCampaignFilter(campaigns)
 
     interface SegRow {
       segment_name: string; members: bigint | number
@@ -281,6 +276,11 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
       mqls: bigint | number; sqls: bigint | number
       discovery_calls: bigint | number; opportunities: bigint | number; won: bigint | number
     }
+
+    const uaCampaign = campaigns.length > 0
+      ? `AND ua.campaign_name IN (${campaigns.map(c => `'${c.replace(/'/g, "''")}'`).join(', ')})`
+      : ''
+    const uaDate = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
 
     const [segRows, indRows] = await Promise.all([
       bqQuery<SegRow>(`
@@ -310,17 +310,7 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
       bqQuery<IndRow>(`
         SELECT
           Industry AS industry,
-          COUNT(DISTINCT CASE WHEN LOWER(Email) IN (
-            SELECT DISTINCT LOWER(email)
-            FROM ${t('Pardot_Prospects')}
-            WHERE NOT REGEXP_CONTAINS(LOWER(email), r'test|tkxel|work|uzair|sami')
-              AND id IN (
-                SELECT DISTINCT prospect_id
-                FROM ${t('Pardot_userActivity')}
-                WHERE type = 4 AND type_name IN ('Form', 'Form Handler')
-                ${mqlCampaign} ${mqlDate}
-              )
-          ) THEN Email END) AS mqls,
+          COUNT(DISTINCT Email) AS mqls,
           COUNT(DISTINCT CASE WHEN SQL__c = TRUE THEN Email END) AS sqls,
           COUNT(DISTINCT CASE WHEN Discovery_Call__c = TRUE THEN Email END) AS discovery_calls,
           COUNT(DISTINCT CASE WHEN IsConverted = TRUE THEN Email END) AS opportunities,
@@ -328,6 +318,7 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
         FROM ${t('Leads_Opp_Joined')}
         WHERE Industry IS NOT NULL AND Industry != ''
           AND Industry NOT IN ('Other', 'No Match')
+          ${sfFilter}
           ${leadDate}
         GROUP BY Industry
         ORDER BY mqls DESC, sqls DESC
