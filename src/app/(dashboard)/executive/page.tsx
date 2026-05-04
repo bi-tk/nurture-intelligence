@@ -460,8 +460,8 @@ export default async function ExecutivePage({
                 {topSequences.map((s) => (
                   <div key={s.name} className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-white text-sm font-medium truncate">{s.name}</p>
-                      <p className="text-white/50 text-xs truncate mt-0.5">{s.subject}</p>
+                      <p className="text-white text-sm font-medium truncate">{s.subject}</p>
+                      <p className="text-white/30 text-xs truncate mt-0.5">{s.name}</p>
                       <p className="text-white/30 text-xs font-mono mt-0.5">Open {s.mqlRate}% · Click {s.sqlRate}%</p>
                     </div>
                     <p className="text-accent-green text-sm font-mono font-medium shrink-0">{s.wonRevenue ? formatCurrency(s.wonRevenue) : '—'}</p>
@@ -479,8 +479,8 @@ export default async function ExecutivePage({
                 {worstSequences.map((s) => (
                   <div key={s.name} className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-white text-sm font-medium truncate">{s.name}</p>
-                      <p className="text-white/50 text-xs truncate mt-0.5">{s.subject}</p>
+                      <p className="text-white text-sm font-medium truncate">{s.subject}</p>
+                      <p className="text-white/30 text-xs truncate mt-0.5">{s.name}</p>
                       <p className="text-white/30 text-xs font-mono mt-0.5">Open {s.mqlRate}% · Click {s.sqlRate}%</p>
                     </div>
                     <p className="text-accent-red text-sm font-mono font-medium">{s.wonRevenue ? formatCurrency(s.wonRevenue) : '—'}</p>
