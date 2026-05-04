@@ -84,7 +84,7 @@ async function getSegmentsData(campaigns: string[], dateRange: string) {
         FROM ${t('Pardot_userActivity')}
         WHERE campaign_name IS NOT NULL AND campaign_name != ''
           ${campaignFilter}
-          ${dateIntervalFilter(dateRange, 'created_at')}
+          ${dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')}
         GROUP BY campaign_name
         HAVING ${EMAIL_SENT_EXPR} >= 10
       `),

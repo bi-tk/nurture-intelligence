@@ -38,7 +38,7 @@ async function fetchKpis(campaigns: string[], dateRange: string) {
     ])
 
     const activityCampaign = campaignSqlFilter(campaigns)
-    const activityDate    = dateIntervalFilter(dateRange, 'created_at')
+    const activityDate    = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
     const activityFilter  = (activityCampaign || activityDate)
       ? `WHERE 1=1 ${activityCampaign} ${activityDate}`
       : ''
@@ -152,7 +152,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
     const campaignFilter = campaigns.length > 0
       ? campaignSqlFilter(campaigns)
       : `AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')`
-    const dateFilter = dateIntervalFilter(dateRange, 'created_at')
+    const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
 
     const rows = await bqQuery<CampaignTrendRow>(`
       SELECT

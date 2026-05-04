@@ -125,7 +125,7 @@ export function leadsCampaignFilter(campaigns: string[]): string {
 // dateRange: '7d', '30d', etc. — filters by form submission date (created_at).
 export function mqlCountSql(campaigns: string[], dateRange = ''): string {
   const campaignClause = campaignSqlFilter(campaigns)
-  const dateClause = dateIntervalFilter(dateRange, 'created_at')
+  const dateClause = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
   return `
     SELECT COUNT(DISTINCT email) AS n
     FROM ${t('Pardot_Prospects')}
