@@ -174,6 +174,7 @@ export default function SequencesTables({
           defaultSort="opens"
           defaultDir="desc"
           emptyMessage="No data"
+          maxHeight="480px"
         />
       </div>
 
@@ -187,6 +188,7 @@ export default function SequencesTables({
           defaultSort="delivered"
           defaultDir="desc"
           emptyMessage="No data — connect Pardot to see performance by prospect title"
+          maxHeight="480px"
         />
       </div>
     </div>

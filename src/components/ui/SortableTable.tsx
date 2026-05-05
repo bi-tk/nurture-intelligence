@@ -16,6 +16,7 @@ interface SortableTableProps {
   defaultSort?: string
   defaultDir?: 'asc' | 'desc'
   emptyMessage?: string
+  maxHeight?: string
 }
 
 export default function SortableTable({
@@ -24,6 +25,7 @@ export default function SortableTable({
   defaultSort,
   defaultDir = 'desc',
   emptyMessage = 'No data',
+  maxHeight,
 }: SortableTableProps) {
   const [sortKey, setSortKey] = useState(defaultSort ?? columns[0]?.key ?? '')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultDir)
@@ -50,45 +52,66 @@ export default function SortableTable({
     return sortDir === 'asc' ? cmp : -cmp
   })
 
+  const headerRow = (
+    <tr className="border-b border-white/5">
+      {columns.map(col => (
+        <th
+          key={col.key}
+          onClick={() => toggleSort(col.key)}
+          className={`px-4 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap cursor-pointer select-none hover:text-white/50 ${col.align === 'right' ? 'text-right' : 'text-left'}`}
+        >
+          {col.label}
+          <span className="ml-1 opacity-60">
+            {sortKey === col.key ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}
+          </span>
+        </th>
+      ))}
+    </tr>
+  )
+
+  const bodyRows = (
+    <>
+      {sorted.length === 0 && (
+        <tr>
+          <td colSpan={columns.length} className="px-4 py-8 text-center text-white/30 text-sm">
+            {emptyMessage}
+          </td>
+        </tr>
+      )}
+      {sorted.map((row, i) => (
+        <tr key={i} className="hover:bg-white/2 transition-colors">
+          {columns.map(col => (
+            <td key={col.key} className={`px-4 py-3 ${col.align === 'right' ? 'text-right' : ''}`}>
+              {col.format
+                ? col.format(row[col.key], row)
+                : (row[col.key] != null ? String(row[col.key]) : '—')}
+            </td>
+          ))}
+        </tr>
+      ))}
+    </>
+  )
+
+  if (maxHeight) {
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>{headerRow}</thead>
+        </table>
+        <div style={{ maxHeight }} className="overflow-y-auto">
+          <table className="w-full text-sm">
+            <tbody className="divide-y divide-white/5">{bodyRows}</tbody>
+          </table>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-white/5">
-            {columns.map(col => (
-              <th
-                key={col.key}
-                onClick={() => toggleSort(col.key)}
-                className={`px-4 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap cursor-pointer select-none hover:text-white/50 ${col.align === 'right' ? 'text-right' : 'text-left'}`}
-              >
-                {col.label}
-                <span className="ml-1 opacity-60">
-                  {sortKey === col.key ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}
-                </span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-white/5">
-          {sorted.length === 0 && (
-            <tr>
-              <td colSpan={columns.length} className="px-4 py-8 text-center text-white/30 text-sm">
-                {emptyMessage}
-              </td>
-            </tr>
-          )}
-          {sorted.map((row, i) => (
-            <tr key={i} className="hover:bg-white/2 transition-colors">
-              {columns.map(col => (
-                <td key={col.key} className={`px-4 py-3 ${col.align === 'right' ? 'text-right' : ''}`}>
-                  {col.format
-                    ? col.format(row[col.key], row)
-                    : (row[col.key] != null ? String(row[col.key]) : '—')}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
+        <thead>{headerRow}</thead>
+        <tbody className="divide-y divide-white/5">{bodyRows}</tbody>
       </table>
     </div>
   )

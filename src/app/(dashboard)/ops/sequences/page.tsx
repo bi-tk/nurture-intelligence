@@ -226,7 +226,6 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
         GROUP BY pp.normalized_title
         HAVING COUNTIF(ua.type = 6) > 0
         ORDER BY sent DESC
-        LIMIT 20
       `),
     ])
 
@@ -316,7 +315,6 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
         clickRate: pct(s.clicks, s.delivered),
       }))
       .sort((a, b) => b.opens - a.opens)
-      .slice(0, 20)
 
     // Prospect titles from real activity data
     const prospectTitles = titleRows.map(r => {
