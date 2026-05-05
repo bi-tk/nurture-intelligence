@@ -615,30 +615,32 @@ export default async function ExecutivePage({
             {topSegments.length === 0 ? (
               <p className="text-white/30 text-sm">No segment data available.</p>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-white/25 text-xs font-mono">
-                    <th className="text-left pb-3">Segment</th>
-                    <th className="text-right pb-3">Members</th>
-                    <th className="text-right pb-3">Open Rate</th>
-                    <th className="text-right pb-3">Click Rate</th>
-                  </tr>
-                </thead>
-              </table>
-              <div className="overflow-y-auto" style={{ maxHeight: '320px' }}>
+              <>
                 <table className="w-full text-sm">
-                  <tbody className="divide-y divide-white/5">
-                    {topSegments.map((s) => (
-                      <tr key={s.name} className="text-white/70">
-                        <td className="py-2.5">{s.name}</td>
-                        <td className="text-right py-2.5 font-mono">{s.members.toLocaleString()}</td>
-                        <td className="text-right py-2.5 font-mono text-pulse-blue">{s.openRate ? formatPercent(s.openRate) : '—'}</td>
-                        <td className="text-right py-2.5 font-mono">{s.clickRate ? formatPercent(s.clickRate) : '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
+                  <thead>
+                    <tr className="text-white/25 text-xs font-mono">
+                      <th className="text-left pb-3">Segment</th>
+                      <th className="text-right pb-3">Members</th>
+                      <th className="text-right pb-3">Open Rate</th>
+                      <th className="text-right pb-3">Click Rate</th>
+                    </tr>
+                  </thead>
                 </table>
-              </div>
+                <div className="overflow-y-auto" style={{ maxHeight: '320px' }}>
+                  <table className="w-full text-sm">
+                    <tbody className="divide-y divide-white/5">
+                      {topSegments.map((s) => (
+                        <tr key={s.name} className="text-white/70">
+                          <td className="py-2.5">{s.name}</td>
+                          <td className="text-right py-2.5 font-mono">{s.members.toLocaleString()}</td>
+                          <td className="text-right py-2.5 font-mono text-pulse-blue">{s.openRate ? formatPercent(s.openRate) : '—'}</td>
+                          <td className="text-right py-2.5 font-mono">{s.clickRate ? formatPercent(s.clickRate) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
@@ -646,34 +648,36 @@ export default async function ExecutivePage({
             {topIndustries.length === 0 ? (
               <p className="text-white/30 text-sm">No industry data available.</p>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-white/25 text-xs font-mono">
-                    <th className="text-left pb-3">Industry</th>
-                    <th className="text-right pb-3">MQL</th>
-                    <th className="text-right pb-3">SQL</th>
-                    <th className="text-right pb-3">DC</th>
-                    <th className="text-right pb-3">Opp</th>
-                    <th className="text-right pb-3">Won</th>
-                  </tr>
-                </thead>
-              </table>
-              <div className="overflow-y-auto" style={{ maxHeight: '320px' }}>
+              <>
                 <table className="w-full text-sm">
-                  <tbody className="divide-y divide-white/5">
-                    {topIndustries.map((ind) => (
-                      <tr key={ind.name} className="text-white/70">
-                        <td className="py-2.5">{ind.name}</td>
-                        <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.mqls}</td>
-                        <td className="text-right py-2.5 font-mono">{ind.sqls}</td>
-                        <td className="text-right py-2.5 font-mono">{ind.discoveryCalls}</td>
-                        <td className="text-right py-2.5 font-mono">{ind.opportunities}</td>
-                        <td className="text-right py-2.5 font-mono text-accent-green">{ind.won}</td>
-                      </tr>
-                    ))}
-                  </tbody>
+                  <thead>
+                    <tr className="text-white/25 text-xs font-mono">
+                      <th className="text-left pb-3">Industry</th>
+                      <th className="text-right pb-3">MQL</th>
+                      <th className="text-right pb-3">SQL</th>
+                      <th className="text-right pb-3">DC</th>
+                      <th className="text-right pb-3">Opp</th>
+                      <th className="text-right pb-3">Won</th>
+                    </tr>
+                  </thead>
                 </table>
-              </div>
+                <div className="overflow-y-auto" style={{ maxHeight: '320px' }}>
+                  <table className="w-full text-sm">
+                    <tbody className="divide-y divide-white/5">
+                      {topIndustries.map((ind) => (
+                        <tr key={ind.name} className="text-white/70">
+                          <td className="py-2.5">{ind.name}</td>
+                          <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.mqls}</td>
+                          <td className="text-right py-2.5 font-mono">{ind.sqls}</td>
+                          <td className="text-right py-2.5 font-mono">{ind.discoveryCalls}</td>
+                          <td className="text-right py-2.5 font-mono">{ind.opportunities}</td>
+                          <td className="text-right py-2.5 font-mono text-accent-green">{ind.won}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         </div>
