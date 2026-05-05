@@ -130,22 +130,61 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
 
       // MQL (form submissions), SQL, and Won Revenue per campaign via prospect→Salesforce join
       bqQuery<CampaignFunnelRow>(`
+        WITH sent_base AS (
+          SELECT DISTINCT
+            ua.prospect_id,
+            ua.campaign_name
+          FROM ${t('Pardot_userActivity')} ua
+          WHERE ua.type = 6
+            AND ua.campaign_name IS NOT NULL 
+            AND ua.campaign_name != ''
+            ${uaCampaignFilter}
+            ${uaDateFilter}
+        ),
+      
+        mql_base AS (
+          SELECT DISTINCT prospect_id
+          FROM ${t('Pardot_userActivity')}
+          WHERE type = 4
+        ),
+      
+        -- ✅ Deduplicate Leads/Opps at email level
+        loj_agg AS (
+          SELECT
+            LOWER(Email) AS email,
+            MAX(CASE WHEN SQL__c = TRUE THEN 1 ELSE 0 END) AS is_sql,
+            SUM(CASE WHEN IsWon = TRUE THEN COALESCE(Amount, 0) ELSE 0 END) AS won_revenue
+          FROM ${t('Leads_Opp_Joined')}
+          GROUP BY LOWER(Email)
+        )
+      
         SELECT
-          ua.campaign_name,
-          COUNT(DISTINCT CASE WHEN fa.prospect_id IS NOT NULL THEN ua.prospect_id END) AS mqls,
-          COUNT(DISTINCT CASE WHEN loj.SQL__c = TRUE THEN LOWER(pp.email) END)         AS sqls,
-          SUM(CASE WHEN loj.IsWon = TRUE THEN COALESCE(loj.Amount, 0) ELSE 0 END)      AS won_revenue
-        FROM ${t('Pardot_userActivity')} ua
-        JOIN ${t('Pardot_Prospects')} pp ON pp.id = ua.prospect_id
-        LEFT JOIN (
-          SELECT DISTINCT prospect_id FROM ${t('Pardot_userActivity')} WHERE type = 4
-        ) fa ON fa.prospect_id = ua.prospect_id
-        LEFT JOIN ${t('Leads_Opp_Joined')} loj ON LOWER(loj.Email) = LOWER(pp.email)
-        WHERE ua.type = 6
-          AND ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
-          ${uaCampaignFilter}
-          ${uaDateFilter}
-        GROUP BY ua.campaign_name
+          sb.campaign_name,
+      
+          -- MQLs
+          COUNT(DISTINCT CASE 
+            WHEN mb.prospect_id IS NOT NULL THEN sb.prospect_id 
+          END) AS mqls,
+      
+          -- SQLs (deduped)
+          COUNT(DISTINCT CASE 
+            WHEN la.is_sql = 1 THEN LOWER(pp.email) 
+          END) AS sqls,
+      
+          -- Revenue (deduped)
+          SUM(COALESCE(la.won_revenue, 0)) AS won_revenue
+      
+        FROM sent_base sb
+        JOIN ${t('Pardot_Prospects')} pp 
+          ON pp.id = sb.prospect_id
+      
+        LEFT JOIN mql_base mb 
+          ON mb.prospect_id = sb.prospect_id
+      
+        LEFT JOIN loj_agg la 
+          ON LOWER(pp.email) = la.email
+      
+        GROUP BY sb.campaign_name
       `),
 
       // Actual email activity aggregated by prospect job title
