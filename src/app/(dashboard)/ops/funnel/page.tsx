@@ -29,8 +29,8 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
     const raw = [
       { stage: 'Engaged', count: engaged },
       { stage: 'MQL', count: mqls },
-      { stage: 'SQL', count: sqls },
       { stage: 'Discovery Call', count: discoveryCalls },
+      { stage: 'SQL', count: sqls },
       { stage: 'Opportunity', count: opps },
       { stage: 'Won', count: wonOpps },
     ]
@@ -88,11 +88,12 @@ export default async function FunnelPage({
         )}
 
         {/* Conversion rates */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <KpiCard label="MQL Rate" value={formatPercent(nurtureTotal ? mqls / nurtureTotal * 100 : 0)} sub="of nurture leads (OQL)" />
-          <KpiCard label="SQL Rate" value={formatPercent(mqls ? sqls / mqls * 100 : 0)} sub="of MQLs" />
-          <KpiCard label="Discovery Call Rate" value={formatPercent(sqls ? discoveryCalls / sqls * 100 : 0)} sub="of SQLs" />
-          <KpiCard label="Win Rate" value={formatPercent(discoveryCalls ? wonOpps / discoveryCalls * 100 : 0)} sub="of discovery calls" accent />
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <KpiCard label="MQL → Discovery Call" value={formatPercent(mqls ? discoveryCalls / mqls * 100 : 0)} sub="of MQLs" />
+          <KpiCard label="Discovery Call → SQL" value={formatPercent(discoveryCalls ? sqls / discoveryCalls * 100 : 0)} sub="of discovery calls" />
+          <KpiCard label="SQL → Opportunity" value={formatPercent(sqls ? opps / sqls * 100 : 0)} sub="of SQLs" />
+          <KpiCard label="Opportunity → Won" value={formatPercent(opps ? wonOpps / opps * 100 : 0)} sub="of opportunities" accent />
+          <KpiCard label="MQL → Won" value={formatPercent(mqls ? wonOpps / mqls * 100 : 0)} sub="end-to-end" />
         </div>
 
         {/* Avg times */}
@@ -121,20 +122,22 @@ export default async function FunnelPage({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/5">
-                {['Stage', 'Count', 'Stage Conversion', 'Drop-off'].map((h) => (
+                {['Stage', 'Count', 'From Previous Stage', 'Drop-off'].map((h) => (
                   <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {funnelData.map((stage, i) => {
-                const dropOff = i > 0 ? 100 - stage.rate : 0
+                const prev = funnelData[i - 1]
+                const stageConv = prev && prev.count > 0 ? parseFloat((stage.count / prev.count * 100).toFixed(2)) : null
+                const dropOff = stageConv !== null ? parseFloat((100 - stageConv).toFixed(2)) : null
                 return (
                   <tr key={stage.stage} className="hover:bg-white/2">
                     <td className="px-5 py-3 text-white">{stage.stage}</td>
                     <td className="px-5 py-3 text-white/70 font-mono">{stage.count.toLocaleString()}</td>
-                    <td className="px-5 py-3 font-mono text-pulse-blue">{i === 0 ? '100%' : formatPercent(stage.rate)}</td>
-                    <td className="px-5 py-3 font-mono text-accent-red">{i === 0 ? '—' : formatPercent(dropOff)}</td>
+                    <td className="px-5 py-3 font-mono text-pulse-blue">{stageConv === null ? '—' : formatPercent(stageConv)}</td>
+                    <td className="px-5 py-3 font-mono text-accent-red">{dropOff === null ? '—' : formatPercent(dropOff)}</td>
                   </tr>
                 )
               })}

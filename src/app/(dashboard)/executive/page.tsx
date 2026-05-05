@@ -126,8 +126,8 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
     const raw = [
       { stage: 'Engaged', count: engaged },
       { stage: 'MQL', count: mqls },
-      { stage: 'SQL', count: sqls },
       { stage: 'Discovery Call', count: discoveryCalls },
+      { stage: 'SQL', count: sqls },
       { stage: 'Opportunity', count: opps },
       { stage: 'Won', count: wonOpps },
     ]
