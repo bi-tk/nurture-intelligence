@@ -86,14 +86,18 @@ async function getContactsData(campaigns: string[], dateRange: string) {
     const buckets = { hot: 0, warm: 0, cold: 0, inactive: 0, suppression: 0, recycle: 0 }
 
     for (const p of rows) {
-      const score = Number(p.score ?? 0)
+      const status = getStatus(p)
       const lastMs = p.last_activity_at ? new Date(p.last_activity_at).getTime() : null
       const days = lastMs != null && !isNaN(lastMs) ? (now - lastMs) / DAY : 999
-      if (score < 0) { buckets.suppression++; continue }
-      if (score >= 100 || days <= 7) { buckets.hot++; continue }
-      if (score >= 50 || days <= 30) { buckets.warm++; continue }
-      if (score >= 10 || days <= 90) { buckets.cold++; continue }
-      if (score >= 1 && score < 10) { buckets.recycle++; continue }
+
+      if (status === 'Unsub' || status === 'Bounced') { buckets.suppression++; continue }
+      if (status === 'Engaged') { buckets.hot++; continue }
+      if (status === 'Low Click' || status === 'Low Open') { buckets.warm++; continue }
+      // Dark: received emails but no recent engagement
+      if (Number(p.total_sent) > 0) {
+        if (days > 180) { buckets.recycle++; continue }
+        buckets.cold++; continue
+      }
       buckets.inactive++
     }
 

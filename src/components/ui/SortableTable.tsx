@@ -95,11 +95,9 @@ export default function SortableTable({
   if (maxHeight) {
     return (
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>{headerRow}</thead>
-        </table>
         <div style={{ maxHeight }} className="overflow-y-auto">
           <table className="w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-graphite-800">{headerRow}</thead>
             <tbody className="divide-y divide-white/5">{bodyRows}</tbody>
           </table>
         </div>
