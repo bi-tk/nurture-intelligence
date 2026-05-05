@@ -128,81 +128,39 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
         LIMIT 200
       `),
 
-      // MQL (form submissions), SQL, and Won Revenue per campaign via prospect→Salesforce join
+      // MQL / SQL / Won Revenue — mirrors executive page logic exactly:
+      //   MQL base = prospects who submitted a Pardot form in this campaign (same as mqlCountSql)
+      //   SQL / Won = those MQL emails joined to Leads_Opp_Joined (same as leadsCampaignFilter)
       bqQuery<CampaignFunnelRow>(`
-        WITH sent_base AS (
-          SELECT DISTINCT
-            ua.prospect_id,
-            ua.campaign_name
+        WITH mql_per_campaign AS (
+          SELECT DISTINCT ua.campaign_name, LOWER(pp.email) AS email
           FROM ${t('Pardot_userActivity')} ua
-          WHERE ua.type = 6
-            AND ua.campaign_name IS NOT NULL 
-            AND ua.campaign_name != ''
+          JOIN ${t('Pardot_Prospects')} pp ON pp.id = ua.prospect_id
+          WHERE ua.type = 4
+            AND ua.type_name IN ('Form', 'Form Handler')
+            AND ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
+            AND NOT REGEXP_CONTAINS(LOWER(pp.email), r'test|tkxel|work|uzair|sami')
             ${uaCampaignFilter}
             ${uaDateFilter}
         ),
-      
-        -- MQL (optional, unchanged)
-        mql_base AS (
-          SELECT DISTINCT prospect_id
-          FROM ${t('Pardot_userActivity')}
-          WHERE type = 4
-            AND type_name IN ('Form', 'Form Handler')
-        ),
-      
-        -- ✅ Salesforce data aggregated at email level
-        loj_agg AS (
+        sf_by_email AS (
           SELECT
             LOWER(Email) AS email,
             MAX(CASE WHEN SQL__c = TRUE THEN 1 ELSE 0 END) AS is_sql,
-            SUM(CASE WHEN IsWon = TRUE THEN COALESCE(Amount, 0) ELSE 0 END) AS won_revenue
+            SUM(CASE WHEN IsWon = TRUE THEN COALESCE(Amount, 0) ELSE 0 END) AS won_amount
           FROM ${t('Leads_Opp_Joined')}
           WHERE Email IS NOT NULL
             AND NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
           GROUP BY LOWER(Email)
-        ),
-      
-        prospects_clean AS (
-          SELECT
-            id,
-            LOWER(email) AS email
-          FROM ${t('Pardot_Prospects')}
-          WHERE email IS NOT NULL
-            AND NOT REGEXP_CONTAINS(LOWER(email), r'test|tkxel|work|uzair|sami')
         )
-      
         SELECT
-          sb.campaign_name,
-      
-          -- MQLs
-          COUNT(DISTINCT CASE 
-            WHEN mb.prospect_id IS NOT NULL THEN sb.prospect_id 
-          END) AS mqls,
-      
-          -- ✅ SQLs ONLY if email exists in Salesforce AND is SQL
-          COUNT(DISTINCT CASE 
-            WHEN la.email IS NOT NULL AND la.is_sql = 1 THEN pc.email 
-          END) AS sqls,
-      
-          -- ✅ Revenue ONLY from matched Salesforce emails
-          SUM(CASE 
-            WHEN la.email IS NOT NULL THEN COALESCE(la.won_revenue, 0)
-            ELSE 0
-          END) AS won_revenue
-      
-        FROM sent_base sb
-      
-        JOIN prospects_clean pc 
-          ON pc.id = sb.prospect_id
-      
-        LEFT JOIN mql_base mb 
-          ON mb.prospect_id = sb.prospect_id
-      
-        -- ✅ KEY: this enforces "email must exist in Salesforce"
-        LEFT JOIN loj_agg la 
-          ON pc.email = la.email
-      
-        GROUP BY sb.campaign_name
+          m.campaign_name,
+          COUNT(DISTINCT m.email)                                   AS mqls,
+          COUNT(DISTINCT CASE WHEN sf.is_sql = 1 THEN m.email END) AS sqls,
+          COALESCE(SUM(sf.won_amount), 0)                          AS won_revenue
+        FROM mql_per_campaign m
+        LEFT JOIN sf_by_email sf ON sf.email = m.email
+        GROUP BY m.campaign_name
       `),
 
       // Actual email activity aggregated by prospect job title
