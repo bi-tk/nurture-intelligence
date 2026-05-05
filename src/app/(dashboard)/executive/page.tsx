@@ -154,7 +154,12 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
       : `AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')`
     const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
 
-    const rows = await bqQuery<CampaignTrendRow>(`
+    const prospectDateFilter = dateIntervalFilter(dateRange, 'SAFE_CAST(created_at AS TIMESTAMP)')
+
+    interface ProspectTrendRow { period_month: string; period_week: string; added: bigint | number }
+
+    const [rows, prospectRows] = await Promise.all([
+      bqQuery<CampaignTrendRow>(`
       SELECT
         campaign_name,
         MAX(details) AS details,
@@ -172,7 +177,18 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
         ${dateFilter}
       GROUP BY campaign_name, period_month, period_week
       HAVING ${EMAIL_SENT_EXPR} >= 1
-    `)
+    `),
+      bqQuery<ProspectTrendRow>(`
+        SELECT
+          FORMAT_DATE('%Y-%m', SAFE_CAST(created_at AS DATE)) AS period_month,
+          FORMAT_DATE('%Y-%W', SAFE_CAST(created_at AS DATE)) AS period_week,
+          COUNT(*) AS added
+        FROM ${t('Pardot_Prospects')}
+        WHERE created_at IS NOT NULL
+          ${prospectDateFilter}
+        GROUP BY period_month, period_week
+      `),
+    ])
 
     // Trend aggregation per month and week
     type PeriodBucket = { sortKey: string; label: string; sent: number; delivered: number; opens: number; clicks: number; bounces: number; unsubs: number }
@@ -211,16 +227,38 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
       c.sent += sent; c.delivered += delivered; c.opens += opens; c.clicks += clicks
     }
 
+    // Prospect addition counts per period
+    const prospectMonthMap = new Map<string, number>()
+    const prospectWeekMap = new Map<string, number>()
+    for (const r of prospectRows) {
+      prospectMonthMap.set(String(r.period_month), (prospectMonthMap.get(String(r.period_month)) ?? 0) + Number(r.added))
+      prospectWeekMap.set(String(r.period_week), (prospectWeekMap.get(String(r.period_week)) ?? 0) + Number(r.added))
+    }
+
+    // Merge prospect months into monthMap so months with only prospect data still appear
+    for (const [key, added] of prospectMonthMap) {
+      if (!monthMap.has(key)) {
+        const [mYear, mMon] = key.split('-')
+        const mLabel = `${MONTH_NAMES[parseInt(mMon ?? '1') - 1] ?? mMon} ${mYear}`
+        monthMap.set(key, { sortKey: key, label: mLabel, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
+      }
+    }
+    for (const [key, added] of prospectWeekMap) {
+      if (!weekMap.has(key)) weekMap.set(key, { sortKey: key, label: key, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
+    }
+
     const sortedMonths = [...monthMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey))
     const sortedWeeks = [...weekMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey)).slice(-12)
 
     const monthlyData = sortedMonths.map(m => ({
       month: m.label, opens: m.opens, clicks: m.clicks,
-      bounceRate: pct(m.bounces, m.sent), unsubRate: pct(m.unsubs, m.delivered), prospectsAdded: 0,
+      bounceRate: pct(m.bounces, m.sent), unsubRate: pct(m.unsubs, m.delivered),
+      prospectsAdded: prospectMonthMap.get(m.sortKey) ?? 0,
     }))
     const weeklyData = sortedWeeks.map(w => ({
       week: w.label, opens: w.opens, clicks: w.clicks,
-      bounceRate: pct(w.bounces, w.sent), unsubRate: pct(w.unsubs, w.delivered), prospectsAdded: 0,
+      bounceRate: pct(w.bounces, w.sent), unsubRate: pct(w.unsubs, w.delivered),
+      prospectsAdded: prospectWeekMap.get(w.sortKey) ?? 0,
     }))
     const trendData = sortedMonths.map(m => ({
       month: m.label, openRate: pct(m.opens, m.delivered), mqls: 0,
