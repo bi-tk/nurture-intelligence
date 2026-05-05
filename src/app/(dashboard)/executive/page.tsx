@@ -478,9 +478,9 @@ export default async function ExecutivePage({
           <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-3">Prospect Engagement</p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <KpiCard label="Total Audience" value={kpi.totalAudience.toLocaleString()} />
-            <KpiCard label="Opened Any Email" value={kpi.prospectsOpenedAny.toLocaleString()} />
-            <KpiCard label="Clicked Any Email" value={kpi.prospectsClickedAny.toLocaleString()} />
-            <KpiCard label="No Engagement" value={kpi.prospectsNoEngagement.toLocaleString()} />
+            <KpiCard label="Opened Any Email" value={kpi.prospectsOpenedAny.toLocaleString()} sub={`${formatPercent(pct(kpi.prospectsOpenedAny, kpi.totalAudience))} of total`} />
+            <KpiCard label="Clicked Any Email" value={kpi.prospectsClickedAny.toLocaleString()} sub={`${formatPercent(pct(kpi.prospectsClickedAny, kpi.totalAudience))} of total`} />
+            <KpiCard label="No Engagement" value={kpi.prospectsNoEngagement.toLocaleString()} sub={`${formatPercent(pct(kpi.prospectsNoEngagement, kpi.totalAudience))} of total`} />
           </div>
         </div>
 
