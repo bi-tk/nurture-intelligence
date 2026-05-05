@@ -142,7 +142,7 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
             ${uaDateFilter}
         ),
       
-        -- ✅ MQL definition aligned with your logic
+        -- MQL (optional, unchanged)
         mql_base AS (
           SELECT DISTINCT prospect_id
           FROM ${t('Pardot_userActivity')}
@@ -150,18 +150,18 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
             AND type_name IN ('Form', 'Form Handler')
         ),
       
-        -- ✅ Clean + dedup Leads/Opps
+        -- ✅ Salesforce data aggregated at email level
         loj_agg AS (
           SELECT
             LOWER(Email) AS email,
             MAX(CASE WHEN SQL__c = TRUE THEN 1 ELSE 0 END) AS is_sql,
             SUM(CASE WHEN IsWon = TRUE THEN COALESCE(Amount, 0) ELSE 0 END) AS won_revenue
           FROM ${t('Leads_Opp_Joined')}
-          WHERE NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
+          WHERE Email IS NOT NULL
+            AND NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
           GROUP BY LOWER(Email)
         ),
       
-        -- ✅ Clean prospects (apply same email filter here)
         prospects_clean AS (
           SELECT
             id,
@@ -174,18 +174,21 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
         SELECT
           sb.campaign_name,
       
-          -- ✅ MQLs
+          -- MQLs
           COUNT(DISTINCT CASE 
             WHEN mb.prospect_id IS NOT NULL THEN sb.prospect_id 
           END) AS mqls,
       
-          -- ✅ SQLs (deduped + filtered)
+          -- ✅ SQLs ONLY if email exists in Salesforce AND is SQL
           COUNT(DISTINCT CASE 
-            WHEN la.is_sql = 1 THEN pc.email 
+            WHEN la.email IS NOT NULL AND la.is_sql = 1 THEN pc.email 
           END) AS sqls,
       
-          -- ✅ Revenue (deduped + filtered)
-          SUM(COALESCE(la.won_revenue, 0)) AS won_revenue
+          -- ✅ Revenue ONLY from matched Salesforce emails
+          SUM(CASE 
+            WHEN la.email IS NOT NULL THEN COALESCE(la.won_revenue, 0)
+            ELSE 0
+          END) AS won_revenue
       
         FROM sent_base sb
       
@@ -195,6 +198,7 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
         LEFT JOIN mql_base mb 
           ON mb.prospect_id = sb.prospect_id
       
+        -- ✅ KEY: this enforces "email must exist in Salesforce"
         LEFT JOIN loj_agg la 
           ON pc.email = la.email
       
