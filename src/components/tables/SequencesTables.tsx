@@ -161,6 +161,7 @@ export default function SequencesTables({
           defaultSort="openRate"
           defaultDir="desc"
           emptyMessage="No data — connect Salesforce & Pardot to see sequence performance"
+          maxHeight="520px"
         />
       </div>
 

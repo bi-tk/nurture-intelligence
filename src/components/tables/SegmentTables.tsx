@@ -90,6 +90,7 @@ export default function SegmentTables({
           defaultSort="members"
           defaultDir="desc"
           emptyMessage="No nurture segments found — connect Pardot to see segment performance"
+          maxHeight="480px"
         />
       </TableCard>
 
@@ -116,6 +117,7 @@ export default function SegmentTables({
           defaultSort="members"
           defaultDir="desc"
           emptyMessage="No data — connect Salesforce to see industry performance"
+          maxHeight="480px"
         />
       </TableCard>
     </div>

@@ -125,7 +125,7 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
         GROUP BY campaign_name
         HAVING ${EMAIL_SENT_EXPR} >= 10
         ORDER BY opens DESC
-        LIMIT 200
+
       `),
 
       // MQL / SQL / Won Revenue — mirrors executive page logic exactly:

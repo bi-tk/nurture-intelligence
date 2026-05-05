@@ -344,7 +344,7 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
         GROUP BY pp.segment_name
         HAVING COUNT(DISTINCT pp.id) > 0
         ORDER BY members DESC
-        LIMIT 6
+
       `),
       bqQuery<IndRow>(`
         SELECT
@@ -361,7 +361,7 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
           ${leadDate}
         GROUP BY Industry
         ORDER BY mqls DESC, sqls DESC
-        LIMIT 8
+
       `),
     ])
 
@@ -624,17 +624,21 @@ export default async function ExecutivePage({
                     <th className="text-right pb-3">Click Rate</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5">
-                  {topSegments.map((s) => (
-                    <tr key={s.name} className="text-white/70">
-                      <td className="py-2.5">{s.name}</td>
-                      <td className="text-right py-2.5 font-mono">{s.members.toLocaleString()}</td>
-                      <td className="text-right py-2.5 font-mono text-pulse-blue">{s.openRate ? formatPercent(s.openRate) : '—'}</td>
-                      <td className="text-right py-2.5 font-mono">{s.clickRate ? formatPercent(s.clickRate) : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
               </table>
+              <div className="overflow-y-auto" style={{ maxHeight: '320px' }}>
+                <table className="w-full text-sm">
+                  <tbody className="divide-y divide-white/5">
+                    {topSegments.map((s) => (
+                      <tr key={s.name} className="text-white/70">
+                        <td className="py-2.5">{s.name}</td>
+                        <td className="text-right py-2.5 font-mono">{s.members.toLocaleString()}</td>
+                        <td className="text-right py-2.5 font-mono text-pulse-blue">{s.openRate ? formatPercent(s.openRate) : '—'}</td>
+                        <td className="text-right py-2.5 font-mono">{s.clickRate ? formatPercent(s.clickRate) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
@@ -653,19 +657,23 @@ export default async function ExecutivePage({
                     <th className="text-right pb-3">Won</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5">
-                  {topIndustries.map((ind) => (
-                    <tr key={ind.name} className="text-white/70">
-                      <td className="py-2.5">{ind.name}</td>
-                      <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.mqls}</td>
-                      <td className="text-right py-2.5 font-mono">{ind.sqls}</td>
-                      <td className="text-right py-2.5 font-mono">{ind.discoveryCalls}</td>
-                      <td className="text-right py-2.5 font-mono">{ind.opportunities}</td>
-                      <td className="text-right py-2.5 font-mono text-accent-green">{ind.won}</td>
-                    </tr>
-                  ))}
-                </tbody>
               </table>
+              <div className="overflow-y-auto" style={{ maxHeight: '320px' }}>
+                <table className="w-full text-sm">
+                  <tbody className="divide-y divide-white/5">
+                    {topIndustries.map((ind) => (
+                      <tr key={ind.name} className="text-white/70">
+                        <td className="py-2.5">{ind.name}</td>
+                        <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.mqls}</td>
+                        <td className="text-right py-2.5 font-mono">{ind.sqls}</td>
+                        <td className="text-right py-2.5 font-mono">{ind.discoveryCalls}</td>
+                        <td className="text-right py-2.5 font-mono">{ind.opportunities}</td>
+                        <td className="text-right py-2.5 font-mono text-accent-green">{ind.won}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>

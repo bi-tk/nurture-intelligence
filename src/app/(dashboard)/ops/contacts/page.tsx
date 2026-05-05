@@ -43,7 +43,7 @@ async function getContactsData() {
         ON LOWER(p.email) = LOWER(l.Email)
         AND (l.OQL__c = TRUE)
       ORDER BY score DESC
-      LIMIT 500
+
     `)
 
     const now = Date.now()

@@ -102,7 +102,7 @@ async function getSegmentsData(campaigns: string[], dateRange: string) {
         WHERE Industry IS NOT NULL AND Industry != ''
         GROUP BY Industry
         ORDER BY cnt DESC
-        LIMIT 20
+
       `),
     ])
 
