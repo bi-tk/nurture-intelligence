@@ -18,17 +18,17 @@ const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'
 
 // ─── Fetch helpers ────────────────────────────────────────────────────────────
 
-async function fetchKpis(campaigns: string[], dateRange: string) {
+async function fetchKpis(campaigns: string[], dateRange: string, segment = '') {
   try {
     if (!isConfigured()) return null
 
-    const sfFilter = leadsCampaignFilter(campaigns)
+    const sfFilter = leadsCampaignFilter(campaigns, segment)
     const leadDate  = dateIntervalFilter(dateRange, 'CreatedDate')
     const wonDate   = dateIntervalFilter(dateRange, 'CloseDate')
     const pipeDate  = dateIntervalFilter(dateRange, 'CreatedDate_opp')
 
     const [mqlCount, sqlCount, discoveryCount, wonRevenue, pipelineValue, opportunitiesCreated, wonOpportunities] = await Promise.all([
-      bqCount(mqlCountSql(campaigns, dateRange)),
+      bqCount(mqlCountSql(campaigns, dateRange, segment)),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter} ${leadDate}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter} ${leadDate}`),
       bqSum(`SELECT SUM(Amount) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter} ${wonDate}`),
@@ -104,15 +104,15 @@ async function fetchKpis(campaigns: string[], dateRange: string) {
   } catch { return null }
 }
 
-async function fetchFunnelData(campaigns: string[], dateRange: string) {
+async function fetchFunnelData(campaigns: string[], dateRange: string, segment = '') {
   try {
     if (!isConfigured()) return null
-    const sfFilter = leadsCampaignFilter(campaigns)
+    const sfFilter = leadsCampaignFilter(campaigns, segment)
     const leadDate = dateIntervalFilter(dateRange, 'CreatedDate')
     const wonDate  = dateIntervalFilter(dateRange, 'CloseDate')
     const [totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Marketing_nurture__c = TRUE ${sfFilter} ${leadDate}`),
-      bqCount(mqlCountSql(campaigns, dateRange)),
+      bqCount(mqlCountSql(campaigns, dateRange, segment)),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter} ${leadDate}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter} ${leadDate}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsConverted = TRUE ${sfFilter} ${leadDate}`),
@@ -145,7 +145,7 @@ interface CampaignTrendRow {
   min_created_at: string
 }
 
-async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
+async function fetchTrendAndSequences(campaigns: string[], dateRange: string, segment = '') {
   try {
     if (!isConfigured()) return null
 
@@ -186,6 +186,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
         FROM ${t('Pardot_Prospects')}
         WHERE created_at IS NOT NULL
           ${prospectDateFilter}
+          ${segment ? `AND EXISTS (SELECT 1 FROM UNNEST(SPLIT(pardot_segments, ',')) AS _seg WHERE TRIM(_seg) = '${segment.replace(/'/g, "''")}')` : ''}
         GROUP BY period_month, period_week
       `),
     ])
@@ -396,7 +397,7 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
 export default async function ExecutivePage({
   searchParams,
 }: {
-  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string }>
+  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string; segment?: string }>
 }) {
   const session = await auth()
   const params = await searchParams
@@ -404,10 +405,11 @@ export default async function ExecutivePage({
     ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
     : []
   const dateRange = params.dateRange ?? '30d'
+  const segment = params.segment ?? ''
 
   const [liveKpi, liveFunnel, liveTrendSeq, liveSegments] = await Promise.all([
-    fetchKpis(campaigns, dateRange), fetchFunnelData(campaigns, dateRange),
-    fetchTrendAndSequences(campaigns, dateRange), fetchSegments(campaigns, dateRange),
+    fetchKpis(campaigns, dateRange, segment), fetchFunnelData(campaigns, dateRange, segment),
+    fetchTrendAndSequences(campaigns, dateRange, segment), fetchSegments(campaigns, dateRange),
   ])
 
   const zeroKpi = {

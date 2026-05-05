@@ -7,15 +7,15 @@ import { bqCount, t, isConfigured, leadsCampaignFilter, mqlCountSql, dateInterva
 
 export const dynamic = 'force-dynamic'
 
-async function fetchFunnelData(campaigns: string[], dateRange: string) {
+async function fetchFunnelData(campaigns: string[], dateRange: string, segment = '') {
   try {
     if (!isConfigured()) return null
-    const sfFilter = leadsCampaignFilter(campaigns)
+    const sfFilter = leadsCampaignFilter(campaigns, segment)
     const leadDate = dateIntervalFilter(dateRange, 'CreatedDate')
     const wonDate  = dateIntervalFilter(dateRange, 'CloseDate')
     const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE OQL__c = TRUE ${sfFilter} ${leadDate}`),
-      bqCount(mqlCountSql(campaigns, dateRange)),
+      bqCount(mqlCountSql(campaigns, dateRange, segment)),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter} ${leadDate}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter} ${leadDate}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsConverted = TRUE ${sfFilter} ${leadDate}`),
@@ -44,7 +44,7 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
 export default async function FunnelPage({
   searchParams,
 }: {
-  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string }>
+  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string; segment?: string }>
 }) {
   const session = await auth()
   const params = await searchParams
@@ -52,7 +52,8 @@ export default async function FunnelPage({
     ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
     : []
   const dateRange = params.dateRange ?? '30d'
-  const live = await fetchFunnelData(campaigns, dateRange)
+  const segment = params.segment ?? ''
+  const live = await fetchFunnelData(campaigns, dateRange, segment)
   const funnelData = live?.stages ?? []
   const isLive = !!live
 
