@@ -12,16 +12,6 @@ const EXCLUDED_PATHS = [
   '/ops/ai-insights',
 ]
 
-const NURTURE_SEGMENTS = [
-  'CIOs and Tech Leaders of Non-Tech',
-  'CEOs and Non-Tech Leaders of Non-Tech',
-  'Managing Partners in Private Equity',
-  'CTOs and Technology Leaders of Tech',
-  'CTOs and Tech Leaders of Funded Tech',
-  'CIOs and Tech Leaders of Non-Tech Businesses With Under',
-  'CEOs and Non-Tech Leaders of Tech Businesses',
-]
-
 const DATE_PRESETS = [
   { value: '7d',   label: 'Last 7 days'    },
   { value: '30d',  label: 'Last 30 days'   },
@@ -135,29 +125,63 @@ function CampaignMultiSelect({
   onChange: (selected: string[]) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [localSelected, setLocalSelected] = useState<string[]>(selected)
   const ref = useRef<HTMLDivElement>(null)
+  // Use refs so the mousedown listener doesn't go stale
+  const localRef = useRef<string[]>(selected)
+  const selectedRef = useRef<string[]>(selected)
+  const onChangeRef = useRef(onChange)
+
+  useEffect(() => { onChangeRef.current = onChange }, [onChange])
+
+  // Keep localRef in sync with state
+  useEffect(() => { localRef.current = localSelected }, [localSelected])
+
+  // When URL-driven selected changes (e.g. navigating back), re-sync local state
+  useEffect(() => {
+    selectedRef.current = selected
+    setLocalSelected(selected)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected.join(',')])
+
+  function closeAndApply() {
+    setOpen(false)
+    if (localRef.current.join(',') !== selectedRef.current.join(',')) {
+      onChangeRef.current(localRef.current)
+    }
+  }
 
   useEffect(() => {
     function onMouseDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node)) closeAndApply()
     }
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
+  // Empty deps: refs ensure no stale closures
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   function toggle(c: string) {
-    onChange(selected.includes(c) ? selected.filter(x => x !== c) : [...selected, c])
+    setLocalSelected(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])
+  }
+
+  function handleToggleOpen() {
+    if (open) {
+      closeAndApply()
+    } else {
+      setOpen(true)
+    }
   }
 
   const label =
-    selected.length === 0 ? 'All Campaigns' :
-    selected.length === 1 ? (selected[0].length > 28 ? selected[0].slice(0, 26) + '…' : selected[0]) :
-    `${selected.length} campaigns`
+    localSelected.length === 0 ? 'All Campaigns' :
+    localSelected.length === 1 ? (localSelected[0].length > 28 ? localSelected[0].slice(0, 26) + '…' : localSelected[0]) :
+    `${localSelected.length} campaigns`
 
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={handleToggleOpen}
         className="bg-graphite-800 border border-white/10 text-white/60 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-pulse-blue/40 cursor-pointer flex items-center gap-1.5 max-w-[200px]"
       >
         <span className="truncate">{label}</span>
@@ -173,7 +197,7 @@ function CampaignMultiSelect({
           ) : (
             <>
               <button
-                onClick={() => onChange([])}
+                onClick={() => setLocalSelected([])}
                 className="w-full text-left px-3 py-2 text-xs text-white/40 hover:text-white/70 hover:bg-white/5 border-b border-white/5"
               >
                 Clear all
@@ -182,7 +206,7 @@ function CampaignMultiSelect({
                 <label key={c} className="flex items-center gap-2 px-3 py-2 hover:bg-white/5 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={selected.includes(c)}
+                    checked={localSelected.includes(c)}
                     onChange={() => toggle(c)}
                     className="accent-pulse-blue shrink-0"
                   />
@@ -210,37 +234,26 @@ export default function FilterBar() {
   if (EXCLUDED_PATHS.some(p => pathname?.includes(p))) return null
 
   const dateRange = searchParams.get('dateRange') ?? '30d'
-  const segment = searchParams.get('segment') ?? ''
   const selectedCampaigns = searchParams.getAll('campaign')
 
   function updateFilter(key: string, value: string) {
     const params = new URLSearchParams(searchParams.toString())
     if (value) params.set(key, value)
     else params.delete(key)
-    router.push(`${pathname}?${params.toString()}`)
+    router.replace(`${pathname}?${params.toString()}`)
   }
 
   function updateCampaigns(selected: string[]) {
     const params = new URLSearchParams(searchParams.toString())
     params.delete('campaign')
     for (const c of selected) params.append('campaign', c)
-    router.push(`${pathname}?${params.toString()}`)
+    router.replace(`${pathname}?${params.toString()}`)
   }
 
   return (
     <div className="relative z-40 flex items-center gap-3 px-5 py-2 border-b border-white/5 bg-graphite-900/80 backdrop-blur-sm shrink-0">
       <p className="text-white/20 text-xs font-mono uppercase tracking-widest shrink-0">Filters</p>
       <DateRangeFilter value={dateRange} onChange={v => updateFilter('dateRange', v)} />
-      <select
-        value={segment}
-        onChange={e => updateFilter('segment', e.target.value)}
-        className="bg-graphite-800 border border-white/10 text-white/60 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-pulse-blue/40 cursor-pointer"
-      >
-        <option value="">All Segments</option>
-        {NURTURE_SEGMENTS.map(s => (
-          <option key={s} value={s}>{s}</option>
-        ))}
-      </select>
       <CampaignMultiSelect
         campaigns={campaigns}
         selected={selectedCampaigns}

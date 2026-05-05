@@ -64,6 +64,7 @@ export default function ContactProspectTable({ rows }: { rows: ProspectRow[] }) 
         defaultSort="score"
         defaultDir="desc"
         emptyMessage="No data — connect Pardot to see prospect activity"
+        maxHeight="600px"
       />
     </div>
   )

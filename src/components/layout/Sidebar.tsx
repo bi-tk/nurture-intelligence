@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import type { Role } from '@prisma/client'
 
@@ -84,6 +84,7 @@ interface SidebarProps {
 
 export default function Sidebar({ role }: SidebarProps) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
 
   const filtered = NAV.filter((item) => item.roles.includes(role))
 
@@ -91,12 +92,19 @@ export default function Sidebar({ role }: SidebarProps) {
   const opsItems = filtered.filter((i) => i.href.startsWith('/ops'))
   const adminItems = filtered.filter((i) => i.href.startsWith('/admin'))
 
+  // Preserve filter params when navigating between pages (admin pages excluded)
+  function navHref(item: NavItem): string {
+    if (item.href.startsWith('/admin')) return item.href
+    const paramsStr = searchParams.toString()
+    return paramsStr ? `${item.href}?${paramsStr}` : item.href
+  }
+
   const renderItem = (item: NavItem) => {
     const active = pathname === item.href || pathname.startsWith(item.href + '/')
     return (
       <Link
         key={item.href}
-        href={item.href}
+        href={navHref(item)}
         className={cn(
           'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150',
           active

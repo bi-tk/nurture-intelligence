@@ -126,8 +126,8 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
     const raw = [
       { stage: 'Engaged', count: engaged },
       { stage: 'MQL', count: mqls },
-      { stage: 'SQL', count: sqls },
       { stage: 'Discovery Call', count: discoveryCalls },
+      { stage: 'SQL', count: sqls },
       { stage: 'Opportunity', count: opps },
       { stage: 'Won', count: wonOpps },
     ]
@@ -154,7 +154,12 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
       : `AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')`
     const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
 
-    const rows = await bqQuery<CampaignTrendRow>(`
+    const prospectDateFilter = dateIntervalFilter(dateRange, 'SAFE_CAST(created_at AS TIMESTAMP)')
+
+    interface ProspectTrendRow { period_month: string; period_week: string; added: bigint | number }
+
+    const [rows, prospectRows] = await Promise.all([
+      bqQuery<CampaignTrendRow>(`
       SELECT
         campaign_name,
         MAX(details) AS details,
@@ -171,8 +176,19 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
         ${campaignFilter}
         ${dateFilter}
       GROUP BY campaign_name, period_month, period_week
-      HAVING ${EMAIL_SENT_EXPR} >= 5
-    `)
+      HAVING ${EMAIL_SENT_EXPR} >= 1
+    `),
+      bqQuery<ProspectTrendRow>(`
+        SELECT
+          FORMAT_DATE('%Y-%m', SAFE_CAST(created_at AS DATE)) AS period_month,
+          FORMAT_DATE('%Y-%W', SAFE_CAST(created_at AS DATE)) AS period_week,
+          COUNT(*) AS added
+        FROM ${t('Pardot_Prospects')}
+        WHERE created_at IS NOT NULL
+          ${prospectDateFilter}
+        GROUP BY period_month, period_week
+      `),
+    ])
 
     // Trend aggregation per month and week
     type PeriodBucket = { sortKey: string; label: string; sent: number; delivered: number; opens: number; clicks: number; bounces: number; unsubs: number }
@@ -192,7 +208,8 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
 
       // Monthly
       const mKey = String(r.period_month)
-      const mLabel = MONTH_NAMES[parseInt(mKey.split('-')[1] ?? '1') - 1] ?? mKey
+      const [mYear, mMon] = mKey.split('-')
+      const mLabel = `${MONTH_NAMES[parseInt(mMon ?? '1') - 1] ?? mMon} ${mYear}`
       if (!monthMap.has(mKey)) monthMap.set(mKey, { sortKey: mKey, label: mLabel, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
       const m = monthMap.get(mKey)!
       m.sent += sent; m.delivered += delivered; m.opens += opens; m.clicks += clicks; m.bounces += bounces; m.unsubs += unsubs
@@ -210,23 +227,45 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
       c.sent += sent; c.delivered += delivered; c.opens += opens; c.clicks += clicks
     }
 
+    // Prospect addition counts per period
+    const prospectMonthMap = new Map<string, number>()
+    const prospectWeekMap = new Map<string, number>()
+    for (const r of prospectRows) {
+      prospectMonthMap.set(String(r.period_month), (prospectMonthMap.get(String(r.period_month)) ?? 0) + Number(r.added))
+      prospectWeekMap.set(String(r.period_week), (prospectWeekMap.get(String(r.period_week)) ?? 0) + Number(r.added))
+    }
+
+    // Merge prospect months into monthMap so months with only prospect data still appear
+    for (const [key, added] of prospectMonthMap) {
+      if (!monthMap.has(key)) {
+        const [mYear, mMon] = key.split('-')
+        const mLabel = `${MONTH_NAMES[parseInt(mMon ?? '1') - 1] ?? mMon} ${mYear}`
+        monthMap.set(key, { sortKey: key, label: mLabel, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
+      }
+    }
+    for (const [key, added] of prospectWeekMap) {
+      if (!weekMap.has(key)) weekMap.set(key, { sortKey: key, label: key, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
+    }
+
     const sortedMonths = [...monthMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey))
     const sortedWeeks = [...weekMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey)).slice(-12)
 
     const monthlyData = sortedMonths.map(m => ({
       month: m.label, opens: m.opens, clicks: m.clicks,
-      bounceRate: pct(m.bounces, m.sent), unsubRate: pct(m.unsubs, m.delivered), prospectsAdded: 0,
+      bounceRate: pct(m.bounces, m.sent), unsubRate: pct(m.unsubs, m.delivered),
+      prospectsAdded: prospectMonthMap.get(m.sortKey) ?? 0,
     }))
     const weeklyData = sortedWeeks.map(w => ({
       week: w.label, opens: w.opens, clicks: w.clicks,
-      bounceRate: pct(w.bounces, w.sent), unsubRate: pct(w.unsubs, w.delivered), prospectsAdded: 0,
+      bounceRate: pct(w.bounces, w.sent), unsubRate: pct(w.unsubs, w.delivered),
+      prospectsAdded: prospectWeekMap.get(w.sortKey) ?? 0,
     }))
     const trendData = sortedMonths.map(m => ({
       month: m.label, openRate: pct(m.opens, m.delivered), mqls: 0,
     }))
 
     const allSequences = [...campaignMap.values()]
-      .filter(c => c.sent >= 10)
+      .filter(c => c.sent >= 1)
       .map(c => ({
         name: c.name,
         subject: c.subject || c.name,
@@ -246,7 +285,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
     const worstSequences = sequences.slice(-3).reverse().map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
 
     return { monthlyData, weeklyData, trendData, topSequences, worstSequences }
-  } catch { return null }
+  } catch (e) { console.error('fetchTrendAndSequences error:', e); return null }
 }
 
 const SEGMENT_NAME_MAP: Record<string, string> = {
@@ -305,7 +344,7 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
         GROUP BY pp.segment_name
         HAVING COUNT(DISTINCT pp.id) > 0
         ORDER BY members DESC
-        LIMIT 6
+
       `),
       bqQuery<IndRow>(`
         SELECT
@@ -322,7 +361,7 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
           ${leadDate}
         GROUP BY Industry
         ORDER BY mqls DESC, sqls DESC
-        LIMIT 8
+
       `),
     ])
 
@@ -477,9 +516,9 @@ export default async function ExecutivePage({
           <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-3">Prospect Engagement</p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <KpiCard label="Total Audience" value={kpi.totalAudience.toLocaleString()} />
-            <KpiCard label="Opened Any Email" value={kpi.prospectsOpenedAny.toLocaleString()} />
-            <KpiCard label="Clicked Any Email" value={kpi.prospectsClickedAny.toLocaleString()} />
-            <KpiCard label="No Engagement" value={kpi.prospectsNoEngagement.toLocaleString()} />
+            <KpiCard label="Opened Any Email" value={kpi.prospectsOpenedAny.toLocaleString()} sub={`${formatPercent(pct(kpi.prospectsOpenedAny, kpi.totalAudience))} of total`} />
+            <KpiCard label="Clicked Any Email" value={kpi.prospectsClickedAny.toLocaleString()} sub={`${formatPercent(pct(kpi.prospectsClickedAny, kpi.totalAudience))} of total`} />
+            <KpiCard label="No Engagement" value={kpi.prospectsNoEngagement.toLocaleString()} sub={`${formatPercent(pct(kpi.prospectsNoEngagement, kpi.totalAudience))} of total`} />
           </div>
         </div>
 
@@ -576,26 +615,28 @@ export default async function ExecutivePage({
             {topSegments.length === 0 ? (
               <p className="text-white/30 text-sm">No segment data available.</p>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-white/25 text-xs font-mono">
-                    <th className="text-left pb-3">Segment</th>
-                    <th className="text-right pb-3">Members</th>
-                    <th className="text-right pb-3">Open Rate</th>
-                    <th className="text-right pb-3">Click Rate</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {topSegments.map((s) => (
-                    <tr key={s.name} className="text-white/70">
-                      <td className="py-2.5">{s.name}</td>
-                      <td className="text-right py-2.5 font-mono">{s.members.toLocaleString()}</td>
-                      <td className="text-right py-2.5 font-mono text-pulse-blue">{s.openRate ? formatPercent(s.openRate) : '—'}</td>
-                      <td className="text-right py-2.5 font-mono">{s.clickRate ? formatPercent(s.clickRate) : '—'}</td>
+              <div className="overflow-y-auto" style={{ maxHeight: '320px' }}>
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-graphite-800">
+                    <tr className="text-white/25 text-xs font-mono">
+                      <th className="text-left pb-3">Segment</th>
+                      <th className="text-right pb-3">Members</th>
+                      <th className="text-right pb-3">Open Rate</th>
+                      <th className="text-right pb-3">Click Rate</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {topSegments.map((s) => (
+                      <tr key={s.name} className="text-white/70">
+                        <td className="py-2.5">{s.name}</td>
+                        <td className="text-right py-2.5 font-mono">{s.members.toLocaleString()}</td>
+                        <td className="text-right py-2.5 font-mono text-pulse-blue">{s.openRate ? formatPercent(s.openRate) : '—'}</td>
+                        <td className="text-right py-2.5 font-mono">{s.clickRate ? formatPercent(s.clickRate) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
@@ -603,30 +644,32 @@ export default async function ExecutivePage({
             {topIndustries.length === 0 ? (
               <p className="text-white/30 text-sm">No industry data available.</p>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-white/25 text-xs font-mono">
-                    <th className="text-left pb-3">Industry</th>
-                    <th className="text-right pb-3">MQL</th>
-                    <th className="text-right pb-3">SQL</th>
-                    <th className="text-right pb-3">DC</th>
-                    <th className="text-right pb-3">Opp</th>
-                    <th className="text-right pb-3">Won</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {topIndustries.map((ind) => (
-                    <tr key={ind.name} className="text-white/70">
-                      <td className="py-2.5">{ind.name}</td>
-                      <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.mqls}</td>
-                      <td className="text-right py-2.5 font-mono">{ind.sqls}</td>
-                      <td className="text-right py-2.5 font-mono">{ind.discoveryCalls}</td>
-                      <td className="text-right py-2.5 font-mono">{ind.opportunities}</td>
-                      <td className="text-right py-2.5 font-mono text-accent-green">{ind.won}</td>
+              <div className="overflow-y-auto" style={{ maxHeight: '320px' }}>
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-graphite-800">
+                    <tr className="text-white/25 text-xs font-mono">
+                      <th className="text-left pb-3">Industry</th>
+                      <th className="text-right pb-3">MQL</th>
+                      <th className="text-right pb-3">SQL</th>
+                      <th className="text-right pb-3">DC</th>
+                      <th className="text-right pb-3">Opp</th>
+                      <th className="text-right pb-3">Won</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {topIndustries.map((ind) => (
+                      <tr key={ind.name} className="text-white/70">
+                        <td className="py-2.5">{ind.name}</td>
+                        <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.mqls}</td>
+                        <td className="text-right py-2.5 font-mono">{ind.sqls}</td>
+                        <td className="text-right py-2.5 font-mono">{ind.discoveryCalls}</td>
+                        <td className="text-right py-2.5 font-mono">{ind.opportunities}</td>
+                        <td className="text-right py-2.5 font-mono text-accent-green">{ind.won}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>

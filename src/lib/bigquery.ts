@@ -87,11 +87,11 @@ function sqlList(values: string[]): string {
   return values.map(v => `'${v.replace(/'/g, "''")}'`).join(', ')
 }
 
-// AND/WHERE fragment to filter Pardot_userActivity rows by campaign_name
-export function campaignSqlFilter(campaigns: string[], prefix = 'AND'): string {
+// AND/WHERE fragment to filter rows by campaign_name (or aliased column)
+export function campaignSqlFilter(campaigns: string[], prefix = 'AND', column = 'campaign_name'): string {
   if (campaigns.length === 0) return ''
-  if (campaigns.length === 1) return `${prefix} campaign_name = '${campaigns[0].replace(/'/g, "''")}'`
-  return `${prefix} campaign_name IN (${sqlList(campaigns)})`
+  if (campaigns.length === 1) return `${prefix} ${column} = '${campaigns[0].replace(/'/g, "''")}'`
+  return `${prefix} ${column} IN (${sqlList(campaigns)})`
 }
 
 // Date interval filter.

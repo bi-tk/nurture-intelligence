@@ -64,12 +64,27 @@ interface CampaignRow {
   min_created_at: string
 }
 
-interface ProspectRow { job_title: string; score: number }
+interface CampaignFunnelRow {
+  campaign_name: string
+  mqls: bigint | number
+  sqls: bigint | number
+  won_revenue: number | null
+}
+
+interface TitleActivityRow {
+  normalized_title: string
+  sent: bigint | number
+  opens: bigint | number
+  clicks: bigint | number
+  unsubs: bigint | number
+  bounces: bigint | number
+}
 
 async function getSequencesData(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return { sequences: [], subjectLines: [], prospectTitles: [], connected: false }
 
+    // Filters for the simple (non-aliased) campaign query
     const campaignFilter = campaigns.length > 0
       ? campaignSqlFilter(campaigns)
       : `AND NOT (
@@ -77,9 +92,21 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
             OR LOWER(campaign_name) LIKE '% test%'
             OR LOWER(campaign_name) LIKE '%testing%'
           )`
+    // Filters for aliased-table queries (ua.campaign_name)
+    const uaCampaignFilter = campaigns.length > 0
+      ? campaignSqlFilter(campaigns, 'AND', 'ua.campaign_name')
+      : `AND NOT (
+            LOWER(ua.campaign_name) LIKE '%copy%'
+            OR LOWER(ua.campaign_name) LIKE '% test%'
+            OR LOWER(ua.campaign_name) LIKE '%testing%'
+          )`
+    const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
+    const uaDateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
 
-    const [thresholds, campaignRows, prospectRows] = await Promise.all([
+    const [thresholds, campaignRows, funnelRows, titleRows] = await Promise.all([
       getSignalThresholds(),
+
+      // Email engagement per campaign
       bqQuery<CampaignRow>(`
         SELECT
           campaign_name,
@@ -94,17 +121,69 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
         FROM ${t('Pardot_userActivity')}
         WHERE campaign_name IS NOT NULL AND campaign_name != ''
           ${campaignFilter}
-          ${dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')}
+          ${dateFilter}
         GROUP BY campaign_name
         HAVING ${EMAIL_SENT_EXPR} >= 10
         ORDER BY opens DESC
-        LIMIT 200
+
       `),
-      bqQuery<ProspectRow>(`
-        SELECT job_title, COALESCE(score, 0) AS score
-        FROM ${t('Pardot_Prospects')}
-        WHERE job_title IS NOT NULL AND job_title != ''
-        LIMIT 1000
+
+      // MQL / SQL / Won Revenue — mirrors executive page logic exactly:
+      //   MQL base = prospects who submitted a Pardot form in this campaign (same as mqlCountSql)
+      //   SQL / Won = those MQL emails joined to Leads_Opp_Joined (same as leadsCampaignFilter)
+      bqQuery<CampaignFunnelRow>(`
+        WITH mql_per_campaign AS (
+          SELECT DISTINCT ua.campaign_name, LOWER(pp.email) AS email
+          FROM ${t('Pardot_userActivity')} ua
+          JOIN ${t('Pardot_Prospects')} pp ON pp.id = ua.prospect_id
+          WHERE ua.type = 4
+            AND ua.type_name IN ('Form', 'Form Handler')
+            AND ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
+            AND NOT REGEXP_CONTAINS(LOWER(pp.email), r'test|tkxel|work|uzair|sami')
+            ${uaCampaignFilter}
+            ${uaDateFilter}
+        ),
+        sf_by_email AS (
+          SELECT
+            LOWER(Email) AS email,
+            MAX(CASE WHEN SQL__c = TRUE THEN 1 ELSE 0 END) AS is_sql,
+            SUM(CASE WHEN IsWon = TRUE THEN COALESCE(Amount, 0) ELSE 0 END) AS won_amount
+          FROM ${t('Leads_Opp_Joined')}
+          WHERE Email IS NOT NULL
+            AND NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
+          GROUP BY LOWER(Email)
+        )
+        SELECT
+          m.campaign_name,
+          COUNT(DISTINCT m.email)                                   AS mqls,
+          COUNT(DISTINCT CASE WHEN sf.is_sql = 1 THEN m.email END) AS sqls,
+          COALESCE(SUM(sf.won_amount), 0)                          AS won_revenue
+        FROM mql_per_campaign m
+        LEFT JOIN sf_by_email sf ON sf.email = m.email
+        GROUP BY m.campaign_name
+      `),
+
+      // Actual email activity aggregated by prospect job title
+      bqQuery<TitleActivityRow>(`
+        SELECT
+          pp.normalized_title,
+          COUNTIF(ua.type = 6)                                                        AS sent,
+          COUNTIF(ua.type = 11)                                                       AS opens,
+          COUNTIF((ua.type = 1 AND ua.type_name = 'Email Tracker') OR ua.type = 17)  AS clicks,
+          COUNTIF(ua.type IN (12, 35))                                                AS unsubs,
+          COUNTIF(ua.type IN (13, 36))                                                AS bounces
+        FROM ${t('Pardot_userActivity')} ua
+        JOIN ${t('Pardot_Prospects')} pp 
+          ON pp.id = ua.prospect_id
+        WHERE pp.normalized_title IS NOT NULL 
+          AND pp.normalized_title != ''
+          AND ua.campaign_name IS NOT NULL 
+          AND ua.campaign_name != ''
+          ${uaCampaignFilter}
+          ${uaDateFilter}
+        GROUP BY pp.normalized_title
+        HAVING COUNTIF(ua.type = 6) > 0
+        ORDER BY sent DESC
       `),
     ])
 
@@ -114,6 +193,16 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
       if (openRate >= thresholds.warm) return 'Warm'
       if (openRate >= thresholds.cold) return 'Cold'
       return 'At Risk'
+    }
+
+    // Build campaign funnel lookup
+    const funnelMap = new Map<string, { mqls: number; sqls: number; wonRevenue: number }>()
+    for (const r of funnelRows) {
+      funnelMap.set(r.campaign_name, {
+        mqls: Number(r.mqls),
+        sqls: Number(r.sqls),
+        wonRevenue: Number(r.won_revenue ?? 0),
+      })
     }
 
     const allSequences = campaignRows.map(r => {
@@ -131,6 +220,9 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
       const bounceRate = pct(bounces, sent)
       const unsubRate = pct(unsubs, delivered)
       const segmentCode = extractSegmentCode(r.campaign_name) ?? ''
+      const funnel = funnelMap.get(r.campaign_name)
+      const mqls = funnel?.mqls ?? 0
+      const sqls = funnel?.sqls ?? 0
       return {
         id: undefined as number | undefined,
         name: r.campaign_name,
@@ -141,7 +233,9 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
         status: 'active',
         sent, delivered, opens, clicks, bounces, unsubs, spam,
         deliveryRate, openRate, clickRate, ctr, bounceRate, unsubRate,
-        mqlRate: 0, sqlRate: 0, wonRevenue: 0,
+        mqlRate: pct(mqls, delivered),
+        sqlRate: pct(sqls, delivered),
+        wonRevenue: funnel?.wonRevenue ?? 0,
         signal: signal(openRate, bounceRate),
         sentAt: r.min_created_at,
       }
@@ -150,33 +244,54 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
     const nsOnly = allSequences.filter(s => s.name.startsWith('NS |'))
     const sequences = (nsOnly.length > 0 ? nsOnly : allSequences).sort((a, b) => b.openRate - a.openRate)
 
-    const subjectLines = [...sequences]
-      .sort((a, b) => b.opens - a.opens)
-      .slice(0, 20)
-      .map(s => ({
-        subject: s.subject || s.name, delivered: s.delivered, opens: s.opens,
-        openRate: s.openRate, clicks: s.clicks, clickRate: s.clickRate,
-        unsubs: s.unsubs, bounces: s.bounces,
-      }))
-
-    const titleMap: Record<string, { delivered: number; opens: number; clicks: number }> = {}
-    for (const p of prospectRows) {
-      const title = (p.job_title ?? '').trim() || 'Unknown'
-      if (!titleMap[title]) titleMap[title] = { delivered: 0, opens: 0, clicks: 0 }
-      titleMap[title].delivered++
-      if (Number(p.score) > 50) titleMap[title].opens++
-      if (Number(p.score) > 100) titleMap[title].clicks++
+    // Aggregate same subject lines across campaigns
+    const subjectMap = new Map<string, { subject: string; delivered: number; opens: number; clicks: number; unsubs: number; bounces: number }>()
+    for (const s of sequences) {
+      const key = (s.subject || s.name).toLowerCase().trim()
+      const existing = subjectMap.get(key)
+      if (existing) {
+        existing.delivered += s.delivered
+        existing.opens += s.opens
+        existing.clicks += s.clicks
+        existing.unsubs += s.unsubs
+        existing.bounces += s.bounces
+      } else {
+        subjectMap.set(key, {
+          subject: s.subject || s.name,
+          delivered: s.delivered,
+          opens: s.opens,
+          clicks: s.clicks,
+          unsubs: s.unsubs,
+          bounces: s.bounces,
+        })
+      }
     }
-
-    const prospectTitles = Object.entries(titleMap)
-      .map(([title, v]) => ({
-        title, delivered: v.delivered, opens: v.opens,
-        openRate: pct(v.opens, v.delivered),
-        clicks: v.clicks, clickRate: pct(v.clicks, v.delivered),
-        unsubs: 0, bounces: 0,
+    const subjectLines = Array.from(subjectMap.values())
+      .map(s => ({
+        ...s,
+        openRate: pct(s.opens, s.delivered),
+        clickRate: pct(s.clicks, s.delivered),
       }))
-      .sort((a, b) => b.delivered - a.delivered)
-      .slice(0, 15)
+      .sort((a, b) => b.opens - a.opens)
+
+    // Prospect titles from real activity data
+    const prospectTitles = titleRows.map(r => {
+      const sent = Number(r.sent)
+      const opens = Number(r.opens)
+      const clicks = Number(r.clicks)
+      const bounces = Number(r.bounces)
+      const delivered = Math.max(0, sent - bounces)
+      return {
+        title: r.normalized_title,
+        delivered,
+        opens,
+        openRate: pct(opens, delivered),
+        clicks,
+        clickRate: pct(clicks, delivered),
+        unsubs: Number(r.unsubs),
+        bounces,
+      }
+    })
 
     return { sequences, subjectLines, prospectTitles, connected: true }
   } catch (e) {

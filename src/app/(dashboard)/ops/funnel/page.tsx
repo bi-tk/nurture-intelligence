@@ -3,9 +3,17 @@ import Header from '@/components/layout/Header'
 import FunnelChart from '@/components/charts/FunnelChart'
 import KpiCard from '@/components/ui/KpiCard'
 import { formatPercent } from '@/lib/utils'
-import { bqCount, t, isConfigured, leadsCampaignFilter, mqlCountSql, dateIntervalFilter } from '@/lib/bigquery'
+import { bqCount, bqQuery, t, isConfigured, leadsCampaignFilter, mqlCountSql, dateIntervalFilter } from '@/lib/bigquery'
 
 export const dynamic = 'force-dynamic'
+
+interface AvgTimesRow {
+  avg_to_mql: number | null
+  avg_mql_to_sql: number | null
+  avg_sql_to_opp: number | null
+  avg_opp_to_won: number | null
+  avg_total: number | null
+}
 
 async function fetchFunnelData(campaigns: string[], dateRange: string) {
   try {
@@ -13,7 +21,7 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
     const sfFilter = leadsCampaignFilter(campaigns)
     const leadDate = dateIntervalFilter(dateRange, 'CreatedDate')
     const wonDate  = dateIntervalFilter(dateRange, 'CloseDate')
-    const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
+    const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps, engaged, avgTimesRows] = await Promise.all([
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE OQL__c = TRUE ${sfFilter} ${leadDate}`),
       bqCount(mqlCountSql(campaigns, dateRange)),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter} ${leadDate}`),
@@ -24,19 +32,77 @@ async function fetchFunnelData(campaigns: string[], dateRange: string) {
         SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
         ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)', 'WHERE')}
       `),
+      bqQuery<AvgTimesRow>(`
+        WITH pardot_mql AS (
+          SELECT
+            LOWER(pp.email) AS email,
+            MIN(TIMESTAMP(pp.created_at))  AS nurture_date,
+            MIN(TIMESTAMP(ua.created_at))  AS mql_date
+          FROM ${t('Pardot_Prospects')} pp
+          JOIN ${t('Pardot_userActivity')} ua ON ua.prospect_id = pp.id
+          WHERE ua.type = 4
+            AND ua.type_name IN ('Form', 'Form Handler')
+            AND NOT REGEXP_CONTAINS(LOWER(pp.email), r'test|tkxel|work|uzair|sami')
+          GROUP BY pp.email
+        ),
+        sf_dates AS (
+          SELECT
+            LOWER(Email) AS email,
+            MAX(CASE WHEN SQL__c = TRUE      THEN CreatedDate     END) AS sql_lead_date,
+            MAX(CASE WHEN IsConverted = TRUE  THEN CreatedDate_opp END) AS opp_date,
+            MAX(CASE WHEN IsWon = TRUE        THEN CloseDate       END) AS won_date
+          FROM ${t('Leads_Opp_Joined')}
+          WHERE Email IS NOT NULL
+            AND NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
+          GROUP BY LOWER(Email)
+        )
+        SELECT
+          AVG(CASE
+            WHEN TIMESTAMP_DIFF(m.mql_date, m.nurture_date, DAY) BETWEEN 0 AND 730
+            THEN TIMESTAMP_DIFF(m.mql_date, m.nurture_date, DAY)
+          END) AS avg_to_mql,
+          AVG(CASE
+            WHEN sf.sql_lead_date IS NOT NULL
+              AND DATE_DIFF(DATE(sf.sql_lead_date), DATE(m.mql_date), DAY) BETWEEN 0 AND 365
+            THEN DATE_DIFF(DATE(sf.sql_lead_date), DATE(m.mql_date), DAY)
+          END) AS avg_mql_to_sql,
+          AVG(CASE
+            WHEN sf.opp_date IS NOT NULL AND sf.sql_lead_date IS NOT NULL
+              AND DATE_DIFF(DATE(sf.opp_date), DATE(sf.sql_lead_date), DAY) BETWEEN 0 AND 365
+            THEN DATE_DIFF(DATE(sf.opp_date), DATE(sf.sql_lead_date), DAY)
+          END) AS avg_sql_to_opp,
+          AVG(CASE
+            WHEN sf.won_date IS NOT NULL AND sf.opp_date IS NOT NULL
+              AND DATE_DIFF(DATE(sf.won_date), DATE(sf.opp_date), DAY) BETWEEN 0 AND 730
+            THEN DATE_DIFF(DATE(sf.won_date), DATE(sf.opp_date), DAY)
+          END) AS avg_opp_to_won,
+          AVG(CASE
+            WHEN sf.won_date IS NOT NULL
+              AND DATE_DIFF(DATE(sf.won_date), DATE(m.nurture_date), DAY) BETWEEN 0 AND 1000
+            THEN DATE_DIFF(DATE(sf.won_date), DATE(m.nurture_date), DAY)
+          END) AS avg_total
+        FROM pardot_mql m
+        LEFT JOIN sf_dates sf ON sf.email = m.email
+      `),
     ])
     const base = engaged || 1
     const raw = [
       { stage: 'Engaged', count: engaged },
       { stage: 'MQL', count: mqls },
-      { stage: 'SQL', count: sqls },
       { stage: 'Discovery Call', count: discoveryCalls },
+      { stage: 'SQL', count: sqls },
       { stage: 'Opportunity', count: opps },
       { stage: 'Won', count: wonOpps },
     ]
+    const at = avgTimesRows[0] ?? {}
     return {
       stages: raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(2)) })),
       nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps,
+      avgToMql:    at.avg_to_mql    != null ? Math.round(Number(at.avg_to_mql))    : null,
+      avgMqlToSql: at.avg_mql_to_sql != null ? Math.round(Number(at.avg_mql_to_sql)) : null,
+      avgSqlToOpp: at.avg_sql_to_opp != null ? Math.round(Number(at.avg_sql_to_opp)) : null,
+      avgOppToWon: at.avg_opp_to_won != null ? Math.round(Number(at.avg_opp_to_won)) : null,
+      avgTotal:    at.avg_total     != null ? Math.round(Number(at.avg_total))     : null,
     }
   } catch { return null }
 }
@@ -63,12 +129,18 @@ export default async function FunnelPage({
   const opps = live?.opps ?? 0
   const wonOpps = live?.wonOpps ?? 0
 
+  function fmtDays(d: number | null | undefined): string {
+    if (d == null) return '—'
+    return `${d}d`
+  }
+
   const avgTimes = [
-    { label: 'Avg Time to MQL', value: '14d', sub: 'from nurture entry' },
-    { label: 'Avg Time to SQL', value: '8d', sub: 'from MQL' },
-    { label: 'Avg Time to Opportunity', value: '11d', sub: 'from SQL' },
-    { label: 'Avg Time to Won', value: '34d', sub: 'from opportunity' },
+    { label: 'Avg Time to MQL', value: fmtDays(live?.avgToMql), sub: 'from nurture entry' },
+    { label: 'Avg Time to SQL', value: fmtDays(live?.avgMqlToSql), sub: 'from MQL' },
+    { label: 'Avg Time to Opportunity', value: fmtDays(live?.avgSqlToOpp), sub: 'from SQL' },
+    { label: 'Avg Time to Won', value: fmtDays(live?.avgOppToWon), sub: 'from opportunity' },
   ]
+  const avgSalesCycle = fmtDays(live?.avgTotal)
 
   return (
     <div className="flex flex-col min-h-full">
@@ -88,11 +160,12 @@ export default async function FunnelPage({
         )}
 
         {/* Conversion rates */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <KpiCard label="MQL Rate" value={formatPercent(nurtureTotal ? mqls / nurtureTotal * 100 : 0)} sub="of nurture leads (OQL)" />
-          <KpiCard label="SQL Rate" value={formatPercent(mqls ? sqls / mqls * 100 : 0)} sub="of MQLs" />
-          <KpiCard label="Discovery Call Rate" value={formatPercent(sqls ? discoveryCalls / sqls * 100 : 0)} sub="of SQLs" />
-          <KpiCard label="Win Rate" value={formatPercent(discoveryCalls ? wonOpps / discoveryCalls * 100 : 0)} sub="of discovery calls" accent />
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <KpiCard label="MQL → Discovery Call" value={formatPercent(mqls ? discoveryCalls / mqls * 100 : 0)} sub="of MQLs" />
+          <KpiCard label="Discovery Call → SQL" value={formatPercent(discoveryCalls ? sqls / discoveryCalls * 100 : 0)} sub="of discovery calls" />
+          <KpiCard label="SQL → Opportunity" value={formatPercent(sqls ? opps / sqls * 100 : 0)} sub="of SQLs" />
+          <KpiCard label="Opportunity → Won" value={formatPercent(opps ? wonOpps / opps * 100 : 0)} sub="of opportunities" accent />
+          <KpiCard label="MQL → Won" value={formatPercent(mqls ? wonOpps / mqls * 100 : 0)} sub="end-to-end" />
         </div>
 
         {/* Avg times */}
@@ -107,7 +180,7 @@ export default async function FunnelPage({
         </div>
 
         <div className="grid grid-cols-1 gap-3">
-          <KpiCard label="Avg Sales Cycle (End to End)" value="67 days" sub="From nurture entry to won opportunity" accent />
+          <KpiCard label="Avg Sales Cycle (End to End)" value={avgSalesCycle} sub="From nurture entry to won opportunity" accent />
         </div>
 
         {/* Full funnel visual */}
@@ -121,20 +194,22 @@ export default async function FunnelPage({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/5">
-                {['Stage', 'Count', 'Stage Conversion', 'Drop-off'].map((h) => (
+                {['Stage', 'Count', 'From Previous Stage', 'Drop-off'].map((h) => (
                   <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {funnelData.map((stage, i) => {
-                const dropOff = i > 0 ? 100 - stage.rate : 0
+                const prev = funnelData[i - 1]
+                const stageConv = prev && prev.count > 0 ? parseFloat((stage.count / prev.count * 100).toFixed(2)) : null
+                const dropOff = stageConv !== null ? parseFloat((100 - stageConv).toFixed(2)) : null
                 return (
                   <tr key={stage.stage} className="hover:bg-white/2">
                     <td className="px-5 py-3 text-white">{stage.stage}</td>
                     <td className="px-5 py-3 text-white/70 font-mono">{stage.count.toLocaleString()}</td>
-                    <td className="px-5 py-3 font-mono text-pulse-blue">{i === 0 ? '100%' : formatPercent(stage.rate)}</td>
-                    <td className="px-5 py-3 font-mono text-accent-red">{i === 0 ? '—' : formatPercent(dropOff)}</td>
+                    <td className="px-5 py-3 font-mono text-pulse-blue">{stageConv === null ? '—' : formatPercent(stageConv)}</td>
+                    <td className="px-5 py-3 font-mono text-accent-red">{dropOff === null ? '—' : formatPercent(dropOff)}</td>
                   </tr>
                 )
               })}

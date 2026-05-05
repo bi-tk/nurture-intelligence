@@ -139,8 +139,8 @@ const titleColumns: Column[] = [
   { key: 'openRate', label: 'Open %', format: (v) => <MetricCell value={Number(v ?? 0)} warn={20} bad={15} invert={false} /> },
   { key: 'clicks', label: 'Clicks', format: (v) => <span className="text-white/70 font-mono">{Number(v) > 0 ? formatNumber(Number(v)) : '—'}</span> },
   { key: 'clickRate', label: 'Click %', format: (v) => Number(v) > 0 ? <MetricCell value={Number(v)} warn={3} bad={2} invert={false} /> : <span className="text-white/30">—</span> },
-  { key: 'unsubs', label: 'Unsub', format: () => <span className="text-white/30 font-mono">—</span> },
-  { key: 'bounces', label: 'Bounce', format: () => <span className="text-white/30 font-mono">—</span> },
+  { key: 'unsubs', label: 'Unsub', format: (v) => <span className="text-white/70 font-mono">{Number(v) > 0 ? formatNumber(Number(v)) : '—'}</span> },
+  { key: 'bounces', label: 'Bounce', format: (v) => <span className="text-white/70 font-mono">{Number(v) > 0 ? formatNumber(Number(v)) : '—'}</span> },
 ]
 
 export default function SequencesTables({
@@ -161,6 +161,7 @@ export default function SequencesTables({
           defaultSort="openRate"
           defaultDir="desc"
           emptyMessage="No data — connect Salesforce & Pardot to see sequence performance"
+          maxHeight="520px"
         />
       </div>
 
@@ -174,13 +175,13 @@ export default function SequencesTables({
           defaultSort="opens"
           defaultDir="desc"
           emptyMessage="No data"
+          maxHeight="480px"
         />
       </div>
 
       <div className="bg-graphite-800 border border-white/5 rounded-xl overflow-hidden">
         <div className="px-5 py-4 border-b border-white/5">
           <p className="text-white/40 text-xs font-mono uppercase tracking-widest">Performance by Prospect Title</p>
-          <p className="text-white/25 text-xs mt-1">Delivered = prospects in nurture · Opens = score &gt; 50 · Clicks = score &gt; 100</p>
         </div>
         <SortableTable
           columns={titleColumns}
@@ -188,6 +189,7 @@ export default function SequencesTables({
           defaultSort="delivered"
           defaultDir="desc"
           emptyMessage="No data — connect Pardot to see performance by prospect title"
+          maxHeight="480px"
         />
       </div>
     </div>
