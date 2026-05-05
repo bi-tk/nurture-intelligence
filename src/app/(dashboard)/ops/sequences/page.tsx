@@ -142,47 +142,61 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
             ${uaDateFilter}
         ),
       
+        -- ✅ MQL definition aligned with your logic
         mql_base AS (
           SELECT DISTINCT prospect_id
           FROM ${t('Pardot_userActivity')}
           WHERE type = 4
+            AND type_name IN ('Form', 'Form Handler')
         ),
       
-        -- ✅ Deduplicate Leads/Opps at email level
+        -- ✅ Clean + dedup Leads/Opps
         loj_agg AS (
           SELECT
             LOWER(Email) AS email,
             MAX(CASE WHEN SQL__c = TRUE THEN 1 ELSE 0 END) AS is_sql,
             SUM(CASE WHEN IsWon = TRUE THEN COALESCE(Amount, 0) ELSE 0 END) AS won_revenue
           FROM ${t('Leads_Opp_Joined')}
+          WHERE NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
           GROUP BY LOWER(Email)
+        ),
+      
+        -- ✅ Clean prospects (apply same email filter here)
+        prospects_clean AS (
+          SELECT
+            id,
+            LOWER(email) AS email
+          FROM ${t('Pardot_Prospects')}
+          WHERE email IS NOT NULL
+            AND NOT REGEXP_CONTAINS(LOWER(email), r'test|tkxel|work|uzair|sami')
         )
       
         SELECT
           sb.campaign_name,
       
-          -- MQLs
+          -- ✅ MQLs
           COUNT(DISTINCT CASE 
             WHEN mb.prospect_id IS NOT NULL THEN sb.prospect_id 
           END) AS mqls,
       
-          -- SQLs (deduped)
+          -- ✅ SQLs (deduped + filtered)
           COUNT(DISTINCT CASE 
-            WHEN la.is_sql = 1 THEN LOWER(pp.email) 
+            WHEN la.is_sql = 1 THEN pc.email 
           END) AS sqls,
       
-          -- Revenue (deduped)
+          -- ✅ Revenue (deduped + filtered)
           SUM(COALESCE(la.won_revenue, 0)) AS won_revenue
       
         FROM sent_base sb
-        JOIN ${t('Pardot_Prospects')} pp 
-          ON pp.id = sb.prospect_id
+      
+        JOIN prospects_clean pc 
+          ON pc.id = sb.prospect_id
       
         LEFT JOIN mql_base mb 
           ON mb.prospect_id = sb.prospect_id
       
         LEFT JOIN loj_agg la 
-          ON LOWER(pp.email) = la.email
+          ON pc.email = la.email
       
         GROUP BY sb.campaign_name
       `),
