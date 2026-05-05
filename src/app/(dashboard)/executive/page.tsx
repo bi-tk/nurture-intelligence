@@ -9,7 +9,7 @@ import {
   bqQuery, bqCount, bqSum, t, pct, isConfigured,
   EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
   EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR, EMAIL_SPAM_EXPR,
-  campaignSqlFilter, leadsCampaignFilter, mqlCountSql, dateIntervalFilter, pardotSegmentFilter,
+  campaignSqlFilter, leadsCampaignFilter, mqlCountSql, dateIntervalFilter,
 } from '@/lib/bigquery'
 
 export const dynamic = 'force-dynamic'
@@ -18,17 +18,17 @@ const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'
 
 // ─── Fetch helpers ────────────────────────────────────────────────────────────
 
-async function fetchKpis(campaigns: string[], dateRange: string, segment = '') {
+async function fetchKpis(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
 
-    const sfFilter = leadsCampaignFilter(campaigns, segment)
+    const sfFilter = leadsCampaignFilter(campaigns)
     const leadDate  = dateIntervalFilter(dateRange, 'CreatedDate')
     const wonDate   = dateIntervalFilter(dateRange, 'CloseDate')
     const pipeDate  = dateIntervalFilter(dateRange, 'CreatedDate_opp')
 
     const [mqlCount, sqlCount, discoveryCount, wonRevenue, pipelineValue, opportunitiesCreated, wonOpportunities] = await Promise.all([
-      bqCount(mqlCountSql(campaigns, dateRange, segment)),
+      bqCount(mqlCountSql(campaigns, dateRange)),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter} ${leadDate}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter} ${leadDate}`),
       bqSum(`SELECT SUM(Amount) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter} ${wonDate}`),
@@ -39,12 +39,9 @@ async function fetchKpis(campaigns: string[], dateRange: string, segment = '') {
 
     const activityCampaign = campaignSqlFilter(campaigns)
     const activityDate    = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
-    const activitySegment = segment ? `AND campaign_name LIKE '%${segment.replace(/'/g, "''")}%'` : ''
-    const activityFilter  = (activityCampaign || activityDate || activitySegment)
-      ? `WHERE 1=1 ${activityCampaign} ${activityDate} ${activitySegment}`
+    const activityFilter  = (activityCampaign || activityDate)
+      ? `WHERE 1=1 ${activityCampaign} ${activityDate}`
       : ''
-
-    const segmentClause = pardotSegmentFilter(segment)
 
     interface EmailRow {
       sent: bigint | number; unique_opens: bigint | number; unique_clicks: bigint | number
@@ -62,12 +59,10 @@ async function fetchKpis(campaigns: string[], dateRange: string, segment = '') {
         FROM ${t('Pardot_userActivity')}
         ${activityFilter}
       `),
-      bqCount(`SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')} WHERE 1=1 ${segmentClause}`),
+      bqCount(`SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}`),
       bqCount(`
         SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
-        WHERE 1=1
-        ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)')}
-        ${segmentClause}
+        ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)', 'WHERE')}
       `),
     ])
 
@@ -109,25 +104,22 @@ async function fetchKpis(campaigns: string[], dateRange: string, segment = '') {
   } catch { return null }
 }
 
-async function fetchFunnelData(campaigns: string[], dateRange: string, segment = '') {
+async function fetchFunnelData(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
-    const sfFilter = leadsCampaignFilter(campaigns, segment)
-    const segmentClause = pardotSegmentFilter(segment)
+    const sfFilter = leadsCampaignFilter(campaigns)
     const leadDate = dateIntervalFilter(dateRange, 'CreatedDate')
     const wonDate  = dateIntervalFilter(dateRange, 'CloseDate')
     const [totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Marketing_nurture__c = TRUE ${sfFilter} ${leadDate}`),
-      bqCount(mqlCountSql(campaigns, dateRange, segment)),
+      bqCount(mqlCountSql(campaigns, dateRange)),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE SQL__c = TRUE ${sfFilter} ${leadDate}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE Discovery_Call__c = TRUE ${sfFilter} ${leadDate}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsConverted = TRUE ${sfFilter} ${leadDate}`),
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter} ${wonDate}`),
       bqCount(`
         SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
-        WHERE 1=1
-        ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)')}
-        ${segmentClause}
+        ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)', 'WHERE')}
       `),
     ])
     const base = engaged || 1
@@ -153,14 +145,13 @@ interface CampaignTrendRow {
   min_created_at: string
 }
 
-async function fetchTrendAndSequences(campaigns: string[], dateRange: string, segment = '') {
+async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
 
     const campaignFilter = campaigns.length > 0
       ? campaignSqlFilter(campaigns)
       : `AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')`
-    const segmentCampaignFilter = segment ? `AND campaign_name LIKE '%${segment.replace(/'/g, "''")}%'` : ''
     const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
 
     const prospectDateFilter = dateIntervalFilter(dateRange, 'SAFE_CAST(created_at AS TIMESTAMP)')
@@ -183,7 +174,6 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string, se
       FROM ${t('Pardot_userActivity')}
       WHERE campaign_name IS NOT NULL AND campaign_name != ''
         ${campaignFilter}
-        ${segmentCampaignFilter}
         ${dateFilter}
       GROUP BY campaign_name, period_month, period_week
       HAVING ${EMAIL_SENT_EXPR} >= 1
@@ -196,7 +186,6 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string, se
         FROM ${t('Pardot_Prospects')}
         WHERE created_at IS NOT NULL
           ${prospectDateFilter}
-          ${segment ? `AND EXISTS (SELECT 1 FROM UNNEST(SPLIT(pardot_segments, ',')) AS _seg WHERE TRIM(_seg) = '${segment.replace(/'/g, "''")}')` : ''}
         GROUP BY period_month, period_week
       `),
     ])
@@ -407,7 +396,7 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
 export default async function ExecutivePage({
   searchParams,
 }: {
-  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string; segment?: string }>
+  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string }>
 }) {
   const session = await auth()
   const params = await searchParams
@@ -415,11 +404,10 @@ export default async function ExecutivePage({
     ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
     : []
   const dateRange = params.dateRange ?? '30d'
-  const segment = params.segment ?? ''
 
   const [liveKpi, liveFunnel, liveTrendSeq, liveSegments] = await Promise.all([
-    fetchKpis(campaigns, dateRange, segment), fetchFunnelData(campaigns, dateRange, segment),
-    fetchTrendAndSequences(campaigns, dateRange, segment), fetchSegments(campaigns, dateRange),
+    fetchKpis(campaigns, dateRange), fetchFunnelData(campaigns, dateRange),
+    fetchTrendAndSequences(campaigns, dateRange), fetchSegments(campaigns, dateRange),
   ])
 
   const zeroKpi = {

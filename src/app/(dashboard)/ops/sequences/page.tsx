@@ -66,7 +66,7 @@ interface CampaignRow {
 
 interface ProspectRow { job_title: string; score: number }
 
-async function getSequencesData(campaigns: string[], dateRange: string, segment = '') {
+async function getSequencesData(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return { sequences: [], subjectLines: [], prospectTitles: [], connected: false }
 
@@ -77,7 +77,6 @@ async function getSequencesData(campaigns: string[], dateRange: string, segment 
             OR LOWER(campaign_name) LIKE '% test%'
             OR LOWER(campaign_name) LIKE '%testing%'
           )`
-    const segmentCampaignFilter = segment ? `AND campaign_name LIKE '%${segment.replace(/'/g, "''")}%'` : ''
 
     const [thresholds, campaignRows, prospectRows] = await Promise.all([
       getSignalThresholds(),
@@ -95,7 +94,6 @@ async function getSequencesData(campaigns: string[], dateRange: string, segment 
         FROM ${t('Pardot_userActivity')}
         WHERE campaign_name IS NOT NULL AND campaign_name != ''
           ${campaignFilter}
-          ${segmentCampaignFilter}
           ${dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')}
         GROUP BY campaign_name
         HAVING ${EMAIL_SENT_EXPR} >= 10
@@ -190,7 +188,7 @@ async function getSequencesData(campaigns: string[], dateRange: string, segment 
 export default async function SequencesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string; segment?: string }>
+  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string }>
 }) {
   const session = await auth()
   const params = await searchParams
@@ -198,8 +196,7 @@ export default async function SequencesPage({
     ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
     : []
   const dateRange = params.dateRange ?? '30d'
-  const segment = params.segment ?? ''
-  const data = await getSequencesData(campaigns, dateRange, segment)
+  const data = await getSequencesData(campaigns, dateRange)
   const isLive = data.connected
 
   return (

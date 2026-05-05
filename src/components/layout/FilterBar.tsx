@@ -12,16 +12,6 @@ const EXCLUDED_PATHS = [
   '/ops/ai-insights',
 ]
 
-const NURTURE_SEGMENTS = [
-  { value: 'CIO_NT_MM',  label: 'CIOs & Tech Leaders | Non-Tech | $50–$500M' },
-  { value: 'CEO_NT',     label: 'CEOs & Non-Tech Leaders | Non-Tech' },
-  { value: 'CEO_T_U50',  label: 'CEOs & Non-Tech Leaders | Tech | Under $50M' },
-  { value: 'CTO_T_U50',  label: 'CTOs & Tech Leaders | Tech | Under $50M' },
-  { value: 'CTO_FTS',    label: 'CTOs & Tech Leaders | Funded Tech Startups' },
-  { value: 'PE_MP',      label: 'Managing Partners | Private Equity' },
-  { value: 'CIO_NT_U50', label: 'CIOs & Tech Leaders | Non-Tech | Under $50M' },
-]
-
 const DATE_PRESETS = [
   { value: '7d',   label: 'Last 7 days'    },
   { value: '30d',  label: 'Last 30 days'   },
@@ -244,7 +234,6 @@ export default function FilterBar() {
   if (EXCLUDED_PATHS.some(p => pathname?.includes(p))) return null
 
   const dateRange = searchParams.get('dateRange') ?? '30d'
-  const segment = searchParams.get('segment') ?? ''
   const selectedCampaigns = searchParams.getAll('campaign')
 
   function updateFilter(key: string, value: string) {
@@ -265,16 +254,6 @@ export default function FilterBar() {
     <div className="relative z-40 flex items-center gap-3 px-5 py-2 border-b border-white/5 bg-graphite-900/80 backdrop-blur-sm shrink-0">
       <p className="text-white/20 text-xs font-mono uppercase tracking-widest shrink-0">Filters</p>
       <DateRangeFilter value={dateRange} onChange={v => updateFilter('dateRange', v)} />
-      <select
-        value={segment}
-        onChange={e => updateFilter('segment', e.target.value)}
-        className="bg-graphite-800 border border-white/10 text-white/60 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-pulse-blue/40 cursor-pointer"
-      >
-        <option value="">All Segments</option>
-        {NURTURE_SEGMENTS.map(s => (
-          <option key={s.value} value={s.value}>{s.label}</option>
-        ))}
-      </select>
       <CampaignMultiSelect
         campaigns={campaigns}
         selected={selectedCampaigns}

@@ -107,28 +107,15 @@ export function dateIntervalFilter(dateRange: string, column: string, prefix = '
   return `${prefix} ${column} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${days} DAY)`
 }
 
-// AND fragment to filter Pardot_Prospects by segment code stored in pardot_segments column.
-// pardot_segments is comma-separated; matches if any element equals the given code.
-export function pardotSegmentFilter(segment: string): string {
-  if (!segment) return ''
-  const safe = segment.replace(/'/g, "''")
-  return `AND EXISTS (
-    SELECT 1 FROM UNNEST(SPLIT(pardot_segments, ',')) AS _seg
-    WHERE TRIM(_seg) = '${safe}'
-  )`
-}
-
 // AND fragment applied to Leads_Opp_Joined: scopes to prospects who submitted a Pardot
 // form in the given campaigns. Excludes internal/test emails.
 // When campaigns is empty, no campaign_name filter is applied.
-export function leadsCampaignFilter(campaigns: string[], segment = ''): string {
+export function leadsCampaignFilter(campaigns: string[]): string {
   const campaignClause = campaignSqlFilter(campaigns)
-  const segmentClause = pardotSegmentFilter(segment)
   return `AND Email IN (
     SELECT DISTINCT email
     FROM ${t('Pardot_Prospects')}
     WHERE NOT REGEXP_CONTAINS(LOWER(email), r'test|tkxel|work|uzair|sami')
-      ${segmentClause}
       AND id IN (
         SELECT DISTINCT prospect_id
         FROM ${t('Pardot_userActivity')}
@@ -141,15 +128,13 @@ export function leadsCampaignFilter(campaigns: string[], segment = ''): string {
 
 // Standalone COUNT DISTINCT query for MQL: distinct emails that submitted a Pardot form.
 // dateRange: '7d', '30d', etc. — filters by form submission date (created_at).
-export function mqlCountSql(campaigns: string[], dateRange = '', segment = ''): string {
+export function mqlCountSql(campaigns: string[], dateRange = ''): string {
   const campaignClause = campaignSqlFilter(campaigns)
   const dateClause = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
-  const segmentClause = pardotSegmentFilter(segment)
   return `
     SELECT COUNT(DISTINCT email) AS n
     FROM ${t('Pardot_Prospects')}
     WHERE NOT REGEXP_CONTAINS(LOWER(email), r'test|tkxel|work|uzair|sami')
-      ${segmentClause}
       AND id IN (
         SELECT DISTINCT prospect_id
         FROM ${t('Pardot_userActivity')}
