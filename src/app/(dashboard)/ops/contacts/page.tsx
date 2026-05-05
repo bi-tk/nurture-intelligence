@@ -1,7 +1,7 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber } from '@/lib/utils'
-import { bqQuery, t, isConfigured } from '@/lib/bigquery'
+import { bqQuery, t, isConfigured, campaignSqlFilter, dateIntervalFilter } from '@/lib/bigquery'
 import ContactProspectTable from '@/components/tables/ContactProspectTable'
 
 export const dynamic = 'force-dynamic'
@@ -19,31 +19,66 @@ interface ProspectRow {
   pardot_segments: string
   pardot_nurture_step: string
   normalized_title: string
+  bounces: number
+  unsubs: number
+  recent_opens: number
+  recent_clicks: number
+  total_sent: number
 }
 
-async function getContactsData() {
+function getStatus(p: ProspectRow): string {
+  if (p.unsubs > 0) return 'Unsub'
+  if (p.bounces > 0) return 'Bounced'
+  if (p.recent_clicks > 0) return 'Engaged'
+  if (p.recent_opens > 1) return 'Low Click'
+  if (p.recent_opens > 0) return 'Low Open'
+  return 'Dark'
+}
+
+async function getContactsData(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
 
+    const campaignFilter = campaignSqlFilter(campaigns, 'AND', 'ua.campaign_name')
+    const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
+
     const rows = await bqQuery<ProspectRow>(`
+      WITH prospect_activity AS (
+        SELECT
+          ua.prospect_id,
+          COUNTIF(ua.type IN (13, 36))   AS bounces,
+          COUNTIF(ua.type IN (12, 35))   AS unsubs,
+          COUNTIF(ua.type = 6)           AS total_sent,
+          COUNTIF(ua.type = 11
+            AND TIMESTAMP(ua.created_at) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY))
+                                         AS recent_opens,
+          COUNTIF((ua.type = 1 AND ua.type_name = 'Email Tracker' OR ua.type = 17)
+            AND TIMESTAMP(ua.created_at) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY))
+                                         AS recent_clicks
+        FROM ${t('Pardot_userActivity')} ua
+        WHERE 1=1 ${campaignFilter} ${dateFilter}
+        GROUP BY ua.prospect_id
+      )
       SELECT
         p.id,
         p.email,
         p.first_name,
         p.last_name,
         p.job_title,
-        COALESCE(p.score, 0)                   AS score,
-        COALESCE(p.grade, '')                  AS grade,
-        COALESCE(p.last_activity_at, '')       AS last_activity_at,
-        COALESCE(p.pardot_segments, '')        AS pardot_segments,
-        COALESCE(p.pardot_nurture_step, '')    AS pardot_nurture_step,
-        COALESCE(l.Normalize_Title_del__c, '') AS normalized_title
+        COALESCE(p.score, 0)                AS score,
+        COALESCE(p.grade, '')               AS grade,
+        COALESCE(p.last_activity_at, '')    AS last_activity_at,
+        COALESCE(p.pardot_segments, '')     AS pardot_segments,
+        COALESCE(p.pardot_nurture_step, '') AS pardot_nurture_step,
+        COALESCE(p.normalized_title, '')    AS normalized_title,
+        COALESCE(pa.bounces, 0)             AS bounces,
+        COALESCE(pa.unsubs, 0)              AS unsubs,
+        COALESCE(pa.recent_opens, 0)        AS recent_opens,
+        COALESCE(pa.recent_clicks, 0)       AS recent_clicks,
+        COALESCE(pa.total_sent, 0)          AS total_sent
       FROM ${t('Pardot_Prospects')} p
-      LEFT JOIN ${t('Leads')} l
-        ON LOWER(p.email) = LOWER(l.Email)
-        AND (l.OQL__c = TRUE)
+      LEFT JOIN prospect_activity pa ON pa.prospect_id = p.id
       ORDER BY score DESC
-
     `)
 
     const now = Date.now()
@@ -62,23 +97,20 @@ async function getContactsData() {
       buckets.inactive++
     }
 
-    const prospects = rows.slice(0, 50).map((p, i) => {
-      const score = Number(p.score ?? 0)
-      return {
-        id: i + 1,
-        name: [p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
-        title: p.job_title || '—',
-        score,
-        grade: p.grade || '—',
-        status: score >= 150 ? 'Engaged' : score >= 75 ? 'Warm' : score >= 25 ? 'Low Click' : 'Dark',
-        lastActivity: p.last_activity_at || null,
-        segment: p.pardot_segments || '—',
-        nurtureStep: p.pardot_nurture_step || '—',
-        normalizedTitle: p.normalized_title || '—',
-      }
-    })
+    const prospects = rows.map((p, i) => ({
+      id: i + 1,
+      name: [p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
+      title: p.job_title || '—',
+      score: Number(p.score ?? 0),
+      grade: p.grade || '—',
+      status: getStatus(p),
+      lastActivity: p.last_activity_at || null,
+      segment: p.pardot_segments || '—',
+      nurtureStep: p.pardot_nurture_step || '—',
+      normalizedTitle: p.normalized_title || '—',
+    }))
 
-    return { buckets, prospects, total: 6421, connected: true }
+    return { buckets, prospects, total: rows.length, connected: true }
   } catch (e) {
     console.error('contacts error:', e)
     return null
@@ -136,9 +168,18 @@ const bucketConfig = [
   },
 ] as const
 
-export default async function ContactsPage() {
+export default async function ContactsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ campaign?: string | string[]; dateRange?: string }>
+}) {
   const session = await auth()
-  const data = await getContactsData()
+  const params = await searchParams
+  const campaigns = params.campaign
+    ? (Array.isArray(params.campaign) ? params.campaign : [params.campaign])
+    : []
+  const dateRange = params.dateRange ?? '30d'
+  const data = await getContactsData(campaigns, dateRange)
   const isLive = !!data?.connected
   const buckets: Record<string, number> = data?.buckets ?? { hot: 0, warm: 0, cold: 0, inactive: 0, suppression: 0, recycle: 0 }
   const prospectRows = data?.prospects ?? []
