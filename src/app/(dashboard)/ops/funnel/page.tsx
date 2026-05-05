@@ -3,7 +3,7 @@ import Header from '@/components/layout/Header'
 import FunnelChart from '@/components/charts/FunnelChart'
 import KpiCard from '@/components/ui/KpiCard'
 import { formatPercent } from '@/lib/utils'
-import { bqCount, t, isConfigured, leadsCampaignFilter, mqlCountSql, dateIntervalFilter } from '@/lib/bigquery'
+import { bqCount, t, isConfigured, leadsCampaignFilter, mqlCountSql, dateIntervalFilter, pardotSegmentFilter } from '@/lib/bigquery'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,6 +11,7 @@ async function fetchFunnelData(campaigns: string[], dateRange: string, segment =
   try {
     if (!isConfigured()) return null
     const sfFilter = leadsCampaignFilter(campaigns, segment)
+    const segmentClause = pardotSegmentFilter(segment)
     const leadDate = dateIntervalFilter(dateRange, 'CreatedDate')
     const wonDate  = dateIntervalFilter(dateRange, 'CloseDate')
     const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps, engaged] = await Promise.all([
@@ -22,7 +23,9 @@ async function fetchFunnelData(campaigns: string[], dateRange: string, segment =
       bqCount(`SELECT COUNT(*) AS n FROM ${t('Leads_Opp_Joined')} WHERE IsWon = TRUE ${sfFilter} ${wonDate}`),
       bqCount(`
         SELECT COUNT(*) AS n FROM ${t('Pardot_Prospects')}
-        ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)', 'WHERE')}
+        WHERE 1=1
+        ${dateIntervalFilter(dateRange, 'SAFE_CAST(last_activity_at AS TIMESTAMP)')}
+        ${segmentClause}
       `),
     ])
     const base = engaged || 1
