@@ -170,7 +170,8 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
         HAVING COUNTIF(ua.type = 6) > 0
         ORDER BY sent DESC
         LIMIT 20
-      `)
+      `),
+    ])
 
     function signal(openRate: number, bounceRate: number): string {
       if (bounceRate >= thresholds.atRiskBounce) return 'At Risk'
