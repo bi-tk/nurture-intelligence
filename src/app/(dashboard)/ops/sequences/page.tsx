@@ -72,7 +72,7 @@ interface CampaignFunnelRow {
 }
 
 interface TitleActivityRow {
-  job_title: string
+  normalized_title: string
   sent: bigint | number
   opens: bigint | number
   clicks: bigint | number
@@ -268,7 +268,7 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
       const bounces = Number(r.bounces)
       const delivered = Math.max(0, sent - bounces)
       return {
-        title: r.job_title,
+        title: r.normalized_title,
         delivered,
         opens,
         openRate: pct(opens, delivered),
