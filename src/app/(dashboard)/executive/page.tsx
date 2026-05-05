@@ -171,7 +171,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
         ${campaignFilter}
         ${dateFilter}
       GROUP BY campaign_name, period_month, period_week
-      HAVING ${EMAIL_SENT_EXPR} >= 5
+      HAVING ${EMAIL_SENT_EXPR} >= 1
     `)
 
     // Trend aggregation per month and week
@@ -192,7 +192,8 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
 
       // Monthly
       const mKey = String(r.period_month)
-      const mLabel = MONTH_NAMES[parseInt(mKey.split('-')[1] ?? '1') - 1] ?? mKey
+      const [mYear, mMon] = mKey.split('-')
+      const mLabel = `${MONTH_NAMES[parseInt(mMon ?? '1') - 1] ?? mMon} ${mYear}`
       if (!monthMap.has(mKey)) monthMap.set(mKey, { sortKey: mKey, label: mLabel, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
       const m = monthMap.get(mKey)!
       m.sent += sent; m.delivered += delivered; m.opens += opens; m.clicks += clicks; m.bounces += bounces; m.unsubs += unsubs
@@ -226,7 +227,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
     }))
 
     const allSequences = [...campaignMap.values()]
-      .filter(c => c.sent >= 10)
+      .filter(c => c.sent >= 1)
       .map(c => ({
         name: c.name,
         subject: c.subject || c.name,
@@ -246,7 +247,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
     const worstSequences = sequences.slice(-3).reverse().map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
 
     return { monthlyData, weeklyData, trendData, topSequences, worstSequences }
-  } catch { return null }
+  } catch (e) { console.error('fetchTrendAndSequences error:', e); return null }
 }
 
 const SEGMENT_NAME_MAP: Record<string, string> = {
