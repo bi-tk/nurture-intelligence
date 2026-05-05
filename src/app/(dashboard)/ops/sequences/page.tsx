@@ -151,24 +151,26 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
       // Actual email activity aggregated by prospect job title
       bqQuery<TitleActivityRow>(`
         SELECT
-          pp.job_title,
+          pp.normalized_title,
           COUNTIF(ua.type = 6)                                                        AS sent,
           COUNTIF(ua.type = 11)                                                       AS opens,
           COUNTIF((ua.type = 1 AND ua.type_name = 'Email Tracker') OR ua.type = 17)  AS clicks,
           COUNTIF(ua.type IN (12, 35))                                                AS unsubs,
           COUNTIF(ua.type IN (13, 36))                                                AS bounces
         FROM ${t('Pardot_userActivity')} ua
-        JOIN ${t('Pardot_Prospects')} pp ON pp.id = ua.prospect_id
-        WHERE pp.job_title IS NOT NULL AND pp.job_title != ''
-          AND ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
+        JOIN ${t('Pardot_Prospects')} pp 
+          ON pp.id = ua.prospect_id
+        WHERE pp.normalized_title IS NOT NULL 
+          AND pp.normalized_title != ''
+          AND ua.campaign_name IS NOT NULL 
+          AND ua.campaign_name != ''
           ${uaCampaignFilter}
           ${uaDateFilter}
-        GROUP BY pp.job_title
+        GROUP BY pp.normalized_title
         HAVING COUNTIF(ua.type = 6) > 0
         ORDER BY sent DESC
         LIMIT 20
-      `),
-    ])
+      `)
 
     function signal(openRate: number, bounceRate: number): string {
       if (bounceRate >= thresholds.atRiskBounce) return 'At Risk'
