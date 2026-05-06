@@ -149,9 +149,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
 
-    const campaignFilter = campaigns.length > 0
-      ? campaignSqlFilter(campaigns)
-      : `AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')`
+    const campaignFilter = campaignSqlFilter(campaigns)
     const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
 
     const prospectDateFilter = dateIntervalFilter(dateRange, 'SAFE_CAST(created_at AS TIMESTAMP)')
@@ -321,9 +319,7 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
       mqls: bigint | number; sqls: bigint | number; won_revenue: number | null
     }
 
-    const uaCampaign = campaigns.length > 0
-      ? `AND ua.campaign_name IN (${campaigns.map(c => `'${c.replace(/'/g, "''")}'`).join(', ')})`
-      : ''
+    const uaCampaign = campaignSqlFilter(campaigns, 'AND', 'ua.campaign_name')
     const uaDate = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
     const campaignFilter = campaignSqlFilter(campaigns)
     const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')

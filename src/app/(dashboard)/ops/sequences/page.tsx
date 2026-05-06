@@ -92,22 +92,8 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return { sequences: [], subjectLines: [], prospectTitles: [], connected: false }
 
-    // Filters for the simple (non-aliased) campaign query
-    const campaignFilter = campaigns.length > 0
-      ? campaignSqlFilter(campaigns)
-      : `AND NOT (
-            LOWER(campaign_name) LIKE '%copy%'
-            OR LOWER(campaign_name) LIKE '% test%'
-            OR LOWER(campaign_name) LIKE '%testing%'
-          )`
-    // Filters for aliased-table queries (ua.campaign_name)
-    const uaCampaignFilter = campaigns.length > 0
-      ? campaignSqlFilter(campaigns, 'AND', 'ua.campaign_name')
-      : `AND NOT (
-            LOWER(ua.campaign_name) LIKE '%copy%'
-            OR LOWER(ua.campaign_name) LIKE '% test%'
-            OR LOWER(ua.campaign_name) LIKE '%testing%'
-          )`
+    const campaignFilter = campaignSqlFilter(campaigns)
+    const uaCampaignFilter = campaignSqlFilter(campaigns, 'AND', 'ua.campaign_name')
     const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
     const uaDateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
 
