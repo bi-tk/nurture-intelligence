@@ -32,11 +32,9 @@ export interface SequenceRow {
 
 export interface SubjectLineRow {
   subject: string
-  delivered: number
+  sent: number
   opens: number
   openRate: number
-  clicks: number
-  clickRate: number
   unsubs: number
   bounces: number
 }
@@ -122,12 +120,10 @@ const sequenceColumns: Column[] = [
 ]
 
 const subjectColumns: Column[] = [
-  { key: 'subject', label: 'Subject Line', format: (v) => <p className="truncate max-w-[260px] text-white/80">{String(v ?? '')}</p> },
-  { key: 'delivered', label: 'Delivered', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },
+  { key: 'subject', label: 'Subject Line', format: (v) => <p className="truncate max-w-[320px] text-white/80">{String(v ?? '')}</p> },
+  { key: 'sent', label: 'Sent', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },
   { key: 'opens', label: 'Opens', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },
   { key: 'openRate', label: 'Open %', format: (v) => <MetricCell value={Number(v ?? 0)} warn={20} bad={15} invert={false} /> },
-  { key: 'clicks', label: 'Clicks', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },
-  { key: 'clickRate', label: 'Click %', format: (v) => <MetricCell value={Number(v ?? 0)} warn={3} bad={2} invert={false} /> },
   { key: 'unsubs', label: 'Unsub', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },
   { key: 'bounces', label: 'Bounce', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },
 ]

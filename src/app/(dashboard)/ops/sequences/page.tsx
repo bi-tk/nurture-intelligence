@@ -71,6 +71,14 @@ interface CampaignFunnelRow {
   won_revenue: number | null
 }
 
+interface SubjectLineQueryRow {
+  details: string
+  sent: bigint | number
+  opens: bigint | number
+  unsubs: bigint | number
+  bounces: bigint | number
+}
+
 interface TitleActivityRow {
   normalized_title: string
   sent: bigint | number
@@ -103,7 +111,7 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
     const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
     const uaDateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
 
-    const [thresholds, campaignRows, funnelRows, titleRows] = await Promise.all([
+    const [thresholds, campaignRows, funnelRows, subjectRows, titleRows] = await Promise.all([
       getSignalThresholds(),
 
       // Email engagement per campaign
@@ -161,6 +169,24 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
         FROM mql_per_campaign m
         LEFT JOIN sf_by_email sf ON sf.email = m.email
         GROUP BY m.campaign_name
+      `),
+
+      // Subject line performance — group by details column from sent emails
+      bqQuery<SubjectLineQueryRow>(`
+        SELECT
+          details,
+          COUNTIF(type = 6)         AS sent,
+          COUNTIF(type = 11)        AS opens,
+          COUNTIF(type IN (12, 35)) AS unsubs,
+          COUNTIF(type IN (13, 36)) AS bounces
+        FROM ${t('Pardot_userActivity')}
+        WHERE details IS NOT NULL AND details != ''
+          AND campaign_name IS NOT NULL AND campaign_name != ''
+          ${campaignFilter}
+          ${dateFilter}
+        GROUP BY details
+        HAVING COUNTIF(type = 6) >= 1
+        ORDER BY opens DESC
       `),
 
       // Actual email activity aggregated by prospect job title
@@ -244,35 +270,20 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
     const nsOnly = allSequences.filter(s => s.name.startsWith('NS |'))
     const sequences = (nsOnly.length > 0 ? nsOnly : allSequences).sort((a, b) => b.openRate - a.openRate)
 
-    // Aggregate same subject lines across campaigns
-    const subjectMap = new Map<string, { subject: string; delivered: number; opens: number; clicks: number; unsubs: number; bounces: number }>()
-    for (const s of sequences) {
-      const key = (s.subject || s.name).toLowerCase().trim()
-      const existing = subjectMap.get(key)
-      if (existing) {
-        existing.delivered += s.delivered
-        existing.opens += s.opens
-        existing.clicks += s.clicks
-        existing.unsubs += s.unsubs
-        existing.bounces += s.bounces
-      } else {
-        subjectMap.set(key, {
-          subject: s.subject || s.name,
-          delivered: s.delivered,
-          opens: s.opens,
-          clicks: s.clicks,
-          unsubs: s.unsubs,
-          bounces: s.bounces,
-        })
+    // Subject lines from direct details GROUP BY query
+    const subjectLines = subjectRows.map(r => {
+      const sent = Number(r.sent)
+      const opens = Number(r.opens)
+      const bounces = Number(r.bounces)
+      return {
+        subject: String(r.details),
+        sent,
+        opens,
+        openRate: pct(opens, sent),
+        unsubs: Number(r.unsubs),
+        bounces,
       }
-    }
-    const subjectLines = Array.from(subjectMap.values())
-      .map(s => ({
-        ...s,
-        openRate: pct(s.opens, s.delivered),
-        clickRate: pct(s.clicks, s.delivered),
-      }))
-      .sort((a, b) => b.opens - a.opens)
+    })
 
     // Prospect titles from real activity data
     const prospectTitles = titleRows.map(r => {
