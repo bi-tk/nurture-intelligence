@@ -53,8 +53,8 @@ interface SegmentRow {
   clicks: bigint | number; bounces: bigint | number; unsubs: bigint | number
 }
 
-interface SegmentFunnelRow {
-  segment_code: string
+interface CampaignFunnelRow {
+  campaign_name: string
   mqls: bigint | number; sqls: bigint | number; won_revenue: number | null
 }
 
@@ -110,44 +110,37 @@ async function getSegmentsData(campaigns: string[], dateRange: string) {
         ORDER BY members DESC
       `),
 
-      // MQL / SQL / Won Revenue per segment — form submitters scoped to segment_code
-      bqQuery<SegmentFunnelRow>(`
-        WITH segment_prospects AS (
-          SELECT id, LOWER(email) AS email,
-                 TRIM(SPLIT(pardot_segments, ',')[OFFSET(0)]) AS segment_code
-          FROM ${t('Pardot_Prospects')}
-          WHERE pardot_segments IS NOT NULL AND pardot_segments != ''
-            AND LOWER(TRIM(pardot_segments)) != 'nan'
-            AND NOT REGEXP_CONTAINS(LOWER(email), r'test|tkxel|work|uzair|sami')
-        ),
-        mql_per_segment AS (
-          SELECT DISTINCT sp.segment_code, sp.email
+      // MQL / SQL / Won Revenue per campaign — exact same pattern as sequences page
+      bqQuery<CampaignFunnelRow>(`
+        WITH mql_per_campaign AS (
+          SELECT DISTINCT ua.campaign_name, LOWER(pp.email) AS email
           FROM ${t('Pardot_userActivity')} ua
-          JOIN segment_prospects sp ON sp.id = ua.prospect_id
+          JOIN ${t('Pardot_Prospects')} pp ON pp.id = ua.prospect_id
           WHERE ua.type = 4
             AND ua.type_name IN ('Form', 'Form Handler')
             AND ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
+            AND NOT REGEXP_CONTAINS(LOWER(pp.email), r'test|tkxel|work|uzair|sami')
             ${uaCampaignFilter}
             ${uaDateFilter}
         ),
         sf_by_email AS (
           SELECT
             LOWER(Email) AS email,
-            MAX(IF(SQL__c = TRUE, 1, 0))                           AS is_sql,
-            SUM(IF(IsWon = TRUE, COALESCE(Amount, 0), 0))         AS won_amount
+            MAX(CASE WHEN SQL__c = TRUE THEN 1 ELSE 0 END) AS is_sql,
+            SUM(CASE WHEN IsWon = TRUE THEN COALESCE(Amount, 0) ELSE 0 END) AS won_amount
           FROM ${t('Leads_Opp_Joined')}
           WHERE Email IS NOT NULL
             AND NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
           GROUP BY LOWER(Email)
         )
         SELECT
-          m.segment_code,
-          COUNT(DISTINCT m.email)                                        AS mqls,
-          COUNT(DISTINCT IF(sf.is_sql = 1, m.email, NULL))              AS sqls,
-          COALESCE(SUM(sf.won_amount), 0)                               AS won_revenue
-        FROM mql_per_segment m
+          m.campaign_name,
+          COUNT(DISTINCT m.email)                                   AS mqls,
+          COUNT(DISTINCT CASE WHEN sf.is_sql = 1 THEN m.email END) AS sqls,
+          COALESCE(SUM(sf.won_amount), 0)                          AS won_revenue
+        FROM mql_per_campaign m
         LEFT JOIN sf_by_email sf ON sf.email = m.email
-        GROUP BY m.segment_code
+        GROUP BY m.campaign_name
       `),
 
       // Industry: Pardot_Prospects as base → activity for email stats → Leads_Opp_Joined for MQL/SQL/Won
@@ -202,10 +195,10 @@ async function getSegmentsData(campaigns: string[], dateRange: string) {
       `),
     ])
 
-    // Build funnel lookup keyed directly by segment_code
+    // Build campaign funnel lookup keyed by campaign_name (same as sequences page)
     const funnelMap = new Map<string, { mqls: number; sqls: number; wonRevenue: number }>()
     for (const r of campaignFunnelRows) {
-      funnelMap.set(r.segment_code, {
+      funnelMap.set(r.campaign_name, {
         mqls: Number(r.mqls),
         sqls: Number(r.sqls),
         wonRevenue: Number(r.won_revenue ?? 0),
@@ -249,9 +242,9 @@ async function getSegmentsData(campaigns: string[], dateRange: string) {
       }
     }
 
-    // Add funnel metrics — funnelMap keys are raw pardot_segments values; resolve to clean code
-    for (const [rawCode, funnel] of funnelMap) {
-      const code = extractSegmentCode(rawCode)
+    // Roll up campaign funnel data into segments via extractSegmentCode (same as sequences page)
+    for (const [campaignName, funnel] of funnelMap) {
+      const code = extractSegmentCode(campaignName)
       if (code && segStats[code]) {
         segStats[code].mqls += funnel.mqls
         segStats[code].sqls += funnel.sqls
