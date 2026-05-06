@@ -143,9 +143,10 @@ async function getSegmentsData(campaigns: string[], dateRange: string) {
         GROUP BY m.campaign_name
       `),
 
-      // Industry: Pardot_Prospects as base → activity for email stats → Leads_Opp_Joined for MQL/SQL/Won
+      // Industry: Pardot_Prospects as base. Email stats from activity. MQL/SQL/Won via
+      // form-submitter emails (same pattern as sequences page) scoped to prospect emails.
       bqQuery<IndustryRow>(`
-        WITH prospect_industry AS (
+        WITH prospect_base AS (
           SELECT id, LOWER(email) AS email, industry
           FROM ${t('Pardot_Prospects')}
           WHERE industry IS NOT NULL AND industry != ''
@@ -158,39 +159,50 @@ async function getSegmentsData(campaigns: string[], dateRange: string) {
             SUM(IF(ua.type = 11, 1, 0))                                                      AS opens,
             SUM(IF((ua.type = 1 AND ua.type_name = 'Email Tracker') OR ua.type = 17, 1, 0)) AS clicks,
             SUM(IF(ua.type IN (13, 36), 1, 0))                                               AS bounces,
-            SUM(IF(ua.type IN (12, 35), 1, 0))                                               AS unsubs,
-            MAX(IF(ua.type = 4 AND ua.type_name IN ('Form', 'Form Handler'), 1, 0))          AS is_mql
+            SUM(IF(ua.type IN (12, 35), 1, 0))                                               AS unsubs
           FROM ${t('Pardot_userActivity')} ua
           WHERE ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
             ${uaCampaignFilter}
             ${uaDateFilter}
           GROUP BY ua.prospect_id
         ),
+        mql_emails AS (
+          SELECT DISTINCT LOWER(pp.email) AS email
+          FROM ${t('Pardot_userActivity')} ua
+          JOIN ${t('Pardot_Prospects')} pp ON pp.id = ua.prospect_id
+          WHERE ua.type = 4
+            AND ua.type_name IN ('Form', 'Form Handler')
+            AND ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
+            AND NOT REGEXP_CONTAINS(LOWER(pp.email), r'test|tkxel|work|uzair|sami')
+            ${uaCampaignFilter}
+            ${uaDateFilter}
+        ),
         sf_by_email AS (
           SELECT
             LOWER(Email) AS email,
-            MAX(IF(SQL__c = TRUE, 1, 0))                           AS is_sql,
-            SUM(IF(IsWon = TRUE, COALESCE(Amount, 0), 0))         AS won_amount
+            MAX(IF(SQL__c = TRUE, 1, 0))                     AS is_sql,
+            SUM(IF(IsWon = TRUE, COALESCE(Amount, 0), 0))   AS won_amount
           FROM ${t('Leads_Opp_Joined')}
           WHERE Email IS NOT NULL
             AND NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
           GROUP BY LOWER(Email)
         )
         SELECT
-          pi.industry,
-          COUNT(DISTINCT pi.id)                                                AS members,
-          COALESCE(SUM(es.sent), 0)                                            AS sent,
-          COALESCE(SUM(es.opens), 0)                                           AS opens,
-          COALESCE(SUM(es.clicks), 0)                                          AS clicks,
-          COALESCE(SUM(es.bounces), 0)                                         AS bounces,
-          COALESCE(SUM(es.unsubs), 0)                                          AS unsubs,
-          COUNT(DISTINCT IF(es.is_mql = 1, pi.email, NULL))                   AS mqls,
-          COUNT(DISTINCT IF(sf.is_sql = 1, pi.email, NULL))                   AS sqls,
-          COALESCE(SUM(sf.won_amount), 0)                                      AS won_revenue
-        FROM prospect_industry pi
-        LEFT JOIN email_stats es ON es.prospect_id = pi.id
-        LEFT JOIN sf_by_email sf ON sf.email = pi.email
-        GROUP BY pi.industry
+          pb.industry,
+          COUNT(DISTINCT pb.id)                                                        AS members,
+          COALESCE(SUM(es.sent), 0)                                                    AS sent,
+          COALESCE(SUM(es.opens), 0)                                                   AS opens,
+          COALESCE(SUM(es.clicks), 0)                                                  AS clicks,
+          COALESCE(SUM(es.bounces), 0)                                                 AS bounces,
+          COALESCE(SUM(es.unsubs), 0)                                                  AS unsubs,
+          COUNT(DISTINCT IF(me.email IS NOT NULL, pb.email, NULL))                     AS mqls,
+          COUNT(DISTINCT IF(me.email IS NOT NULL AND sf.is_sql = 1, pb.email, NULL))   AS sqls,
+          COALESCE(SUM(IF(me.email IS NOT NULL, sf.won_amount, 0)), 0)                 AS won_revenue
+        FROM prospect_base pb
+        LEFT JOIN email_stats es ON es.prospect_id = pb.id
+        LEFT JOIN mql_emails me ON me.email = pb.email
+        LEFT JOIN sf_by_email sf ON sf.email = pb.email
+        GROUP BY pb.industry
         ORDER BY members DESC
       `),
     ])
