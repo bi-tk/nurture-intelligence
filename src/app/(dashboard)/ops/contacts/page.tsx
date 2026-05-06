@@ -41,6 +41,10 @@ async function getContactsData(campaigns: string[], dateRange: string) {
 
     const campaignFilter = campaignSqlFilter(campaigns, 'AND', 'ua.campaign_name')
     const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
+    // When campaigns are selected, restrict the prospect list to those who appeared in those campaigns
+    const prospectCampaignFilter = campaigns.length > 0
+      ? `AND p.id IN (SELECT DISTINCT prospect_id FROM ${t('Pardot_userActivity')} ${campaignSqlFilter(campaigns, 'WHERE', 'campaign_name')})`
+      : ''
 
     const rows = await bqQuery<ProspectRow>(`
       WITH prospect_activity AS (
@@ -78,6 +82,7 @@ async function getContactsData(campaigns: string[], dateRange: string) {
         COALESCE(pa.total_sent, 0)          AS total_sent
       FROM ${t('Pardot_Prospects')} p
       LEFT JOIN prospect_activity pa ON pa.prospect_id = p.id
+      WHERE 1=1 ${prospectCampaignFilter}
       ORDER BY score DESC
     `)
 
