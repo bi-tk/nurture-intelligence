@@ -8,7 +8,7 @@ export async function GET() {
       SELECT DISTINCT campaign_name
       FROM ${t('Pardot_userActivity')}
       WHERE campaign_name IS NOT NULL AND campaign_name != ''
-        AND NOT (LOWER(campaign_name) LIKE '%copy%' OR LOWER(campaign_name) LIKE '% test%')
+        AND (campaign_name LIKE 'NS |%' OR LOWER(campaign_name) LIKE '%newsletter%')
       ORDER BY campaign_name
       LIMIT 500
     `)
