@@ -84,15 +84,11 @@ async function getSegmentsData(campaigns: string[], dateRange: string) {
     }
 
     // Non-aliased filters for single-table queries (same as sequences page)
-    const campaignFilter = campaigns.length > 0
-      ? campaignSqlFilter(campaigns)
-      : `AND campaign_name LIKE 'NS |%'`
+    const campaignFilter = campaignSqlFilter(campaigns)
     const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
 
     // Aliased filters for multi-table queries
-    const uaCampaignFilter = campaigns.length > 0
-      ? campaignSqlFilter(campaigns, 'AND', 'ua.campaign_name')
-      : `AND ua.campaign_name LIKE 'NS |%'`
+    const uaCampaignFilter = campaignSqlFilter(campaigns, 'AND', 'ua.campaign_name')
     const uaDateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
 
     const [memberRows, campaignEmailRows, campaignFunnelRows, industryRows] = await Promise.all([
