@@ -156,7 +156,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
 
     const prospectDateFilter = dateIntervalFilter(dateRange, 'SAFE_CAST(created_at AS TIMESTAMP)')
 
-    interface EmailRow { details: string; sent: bigint | number; opens: bigint | number; unsubs: bigint | number }
+    interface EmailRow { details: string; campaign_name: string; sent: bigint | number; opens: bigint | number; unsubs: bigint | number }
     interface ProspectTrendRow { period_month: string; period_week: string; added: bigint | number }
 
     const [rows, prospectRows, emailRows] = await Promise.all([
@@ -193,6 +193,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
       bqQuery<EmailRow>(`
         SELECT
           details,
+          campaign_name,
           COUNTIF(type = 6)         AS sent,
           COUNTIF(type = 11)        AS opens,
           COUNTIF(type IN (12, 35)) AS unsubs
@@ -201,7 +202,7 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
           AND campaign_name IS NOT NULL AND campaign_name != ''
           ${campaignFilter}
           ${dateFilter}
-        GROUP BY details
+        GROUP BY details, campaign_name
         HAVING COUNTIF(type = 6) >= 1
       `),
     ])
@@ -281,13 +282,13 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
     }))
 
     const emailsSorted = emailRows
-      .map(r => ({ subject: String(r.details), opens: Number(r.opens), unsubs: Number(r.unsubs), sent: Number(r.sent) }))
+      .map(r => ({ subject: String(r.details), campaign: String(r.campaign_name), opens: Number(r.opens), unsubs: Number(r.unsubs), sent: Number(r.sent) }))
       .filter(e => e.sent >= 1)
 
     const topSequences = [...emailsSorted].sort((a, b) => b.opens - a.opens).slice(0, 3)
-      .map(e => ({ name: e.subject, subject: e.subject, mqlRate: e.opens, sqlRate: e.unsubs, wonRevenue: 0 }))
+      .map(e => ({ name: e.campaign, subject: e.subject, mqlRate: e.opens, sqlRate: e.unsubs, wonRevenue: 0 }))
     const worstSequences = [...emailsSorted].sort((a, b) => b.unsubs - a.unsubs).slice(0, 3)
-      .map(e => ({ name: e.subject, subject: e.subject, mqlRate: e.opens, sqlRate: e.unsubs, wonRevenue: 0 }))
+      .map(e => ({ name: e.campaign, subject: e.subject, mqlRate: e.opens, sqlRate: e.unsubs, wonRevenue: 0 }))
 
     return { monthlyData, weeklyData, trendData, topSequences, worstSequences }
   } catch (e) { console.error('fetchTrendAndSequences error:', e); return null }
@@ -583,9 +584,9 @@ export default async function ExecutivePage({
                   <div key={s.subject} className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-white text-sm font-medium truncate">{s.subject}</p>
-                      <p className="text-white/30 text-xs font-mono mt-0.5">{formatNumber(s.mqlRate)} opens</p>
+                      <p className="text-white/30 text-xs truncate mt-0.5">{s.name}</p>
+                      <p className="text-white/30 text-xs font-mono mt-0.5">{formatNumber(s.mqlRate)} opens · {formatNumber(s.sqlRate)} unsubs</p>
                     </div>
-                    <p className="text-accent-green text-sm font-mono font-medium shrink-0">{formatNumber(s.sqlRate)} unsubs</p>
                   </div>
                 ))}
               </div>
@@ -601,9 +602,9 @@ export default async function ExecutivePage({
                   <div key={s.subject} className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-white text-sm font-medium truncate">{s.subject}</p>
-                      <p className="text-white/30 text-xs font-mono mt-0.5">{formatNumber(s.mqlRate)} opens</p>
+                      <p className="text-white/30 text-xs truncate mt-0.5">{s.name}</p>
+                      <p className="text-white/30 text-xs font-mono mt-0.5">{formatNumber(s.mqlRate)} opens · {formatNumber(s.sqlRate)} unsubs</p>
                     </div>
-                    <p className="text-accent-red text-sm font-mono font-medium shrink-0">{formatNumber(s.sqlRate)} unsubs</p>
                   </div>
                 ))}
               </div>
