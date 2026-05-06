@@ -156,9 +156,10 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
 
     const prospectDateFilter = dateIntervalFilter(dateRange, 'SAFE_CAST(created_at AS TIMESTAMP)')
 
+    interface EmailRow { details: string; sent: bigint | number; opens: bigint | number; unsubs: bigint | number }
     interface ProspectTrendRow { period_month: string; period_week: string; added: bigint | number }
 
-    const [rows, prospectRows] = await Promise.all([
+    const [rows, prospectRows, emailRows] = await Promise.all([
       bqQuery<CampaignTrendRow>(`
       SELECT
         campaign_name,
@@ -187,6 +188,21 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
         WHERE created_at IS NOT NULL
           ${prospectDateFilter}
         GROUP BY period_month, period_week
+      `),
+
+      bqQuery<EmailRow>(`
+        SELECT
+          details,
+          COUNTIF(type = 6)         AS sent,
+          COUNTIF(type = 11)        AS opens,
+          COUNTIF(type IN (12, 35)) AS unsubs
+        FROM ${t('Pardot_userActivity')}
+        WHERE details IS NOT NULL AND details != ''
+          AND campaign_name IS NOT NULL AND campaign_name != ''
+          ${campaignFilter}
+          ${dateFilter}
+        GROUP BY details
+        HAVING COUNTIF(type = 6) >= 1
       `),
     ])
 
@@ -264,25 +280,14 @@ async function fetchTrendAndSequences(campaigns: string[], dateRange: string) {
       month: m.label, openRate: pct(m.opens, m.delivered), mqls: 0,
     }))
 
-    const allSequences = [...campaignMap.values()]
-      .filter(c => c.sent >= 1)
-      .map(c => ({
-        name: c.name,
-        subject: c.subject || c.name,
-        openRate: pct(c.opens, c.delivered),
-        clickRate: pct(c.clicks, c.delivered),
-      }))
+    const emailsSorted = emailRows
+      .map(r => ({ subject: String(r.details), opens: Number(r.opens), unsubs: Number(r.unsubs), sent: Number(r.sent) }))
+      .filter(e => e.sent >= 1)
 
-    // Deduplicate by subject — keep the entry with the highest open rate per unique subject
-    const subjectMap = new Map<string, typeof allSequences[0]>()
-    for (const s of allSequences) {
-      const existing = subjectMap.get(s.subject)
-      if (!existing || s.openRate > existing.openRate) subjectMap.set(s.subject, s)
-    }
-    const sequences = [...subjectMap.values()].sort((a, b) => b.openRate - a.openRate)
-
-    const topSequences = sequences.slice(0, 3).map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
-    const worstSequences = sequences.slice(-3).reverse().map(s => ({ name: s.name, subject: s.subject, mqlRate: s.openRate, sqlRate: s.clickRate, wonRevenue: 0 }))
+    const topSequences = [...emailsSorted].sort((a, b) => b.opens - a.opens).slice(0, 3)
+      .map(e => ({ name: e.subject, subject: e.subject, mqlRate: e.opens, sqlRate: e.unsubs, wonRevenue: 0 }))
+    const worstSequences = [...emailsSorted].sort((a, b) => b.unsubs - a.unsubs).slice(0, 3)
+      .map(e => ({ name: e.subject, subject: e.subject, mqlRate: e.opens, sqlRate: e.unsubs, wonRevenue: 0 }))
 
     return { monthlyData, weeklyData, trendData, topSequences, worstSequences }
   } catch (e) { console.error('fetchTrendAndSequences error:', e); return null }
@@ -566,41 +571,39 @@ export default async function ExecutivePage({
           </div>
         </div>
 
-        {/* Best / Worst Sequences */}
+        {/* Top / Worst Emails */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
-            <p className="text-accent-green text-xs font-mono uppercase tracking-widest mb-4">Top Performing Sequences</p>
+            <p className="text-accent-green text-xs font-mono uppercase tracking-widest mb-4">Top Performing Emails</p>
             {topSequences.length === 0 ? (
-              <p className="text-white/30 text-sm">No sequence data available.</p>
+              <p className="text-white/30 text-sm">No email data available.</p>
             ) : (
               <div className="space-y-3">
                 {topSequences.map((s) => (
-                  <div key={s.name} className="flex items-center justify-between gap-3">
+                  <div key={s.subject} className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-white text-sm font-medium truncate">{s.subject}</p>
-                      <p className="text-white/30 text-xs truncate mt-0.5">{s.name}</p>
-                      <p className="text-white/30 text-xs font-mono mt-0.5">Open {s.mqlRate}% · Click {s.sqlRate}%</p>
+                      <p className="text-white/30 text-xs font-mono mt-0.5">{formatNumber(s.mqlRate)} opens</p>
                     </div>
-                    <p className="text-accent-green text-sm font-mono font-medium shrink-0">{s.wonRevenue ? formatCurrency(s.wonRevenue) : '—'}</p>
+                    <p className="text-accent-green text-sm font-mono font-medium shrink-0">{formatNumber(s.sqlRate)} unsubs</p>
                   </div>
                 ))}
               </div>
             )}
           </div>
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
-            <p className="text-accent-red text-xs font-mono uppercase tracking-widest mb-4">Underperforming Sequences</p>
+            <p className="text-accent-red text-xs font-mono uppercase tracking-widest mb-4">Underperforming Emails</p>
             {worstSequences.length === 0 ? (
-              <p className="text-white/30 text-sm">No sequence data available.</p>
+              <p className="text-white/30 text-sm">No email data available.</p>
             ) : (
               <div className="space-y-3">
                 {worstSequences.map((s) => (
-                  <div key={s.name} className="flex items-center justify-between gap-3">
+                  <div key={s.subject} className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-white text-sm font-medium truncate">{s.subject}</p>
-                      <p className="text-white/30 text-xs truncate mt-0.5">{s.name}</p>
-                      <p className="text-white/30 text-xs font-mono mt-0.5">Open {s.mqlRate}% · Click {s.sqlRate}%</p>
+                      <p className="text-white/30 text-xs font-mono mt-0.5">{formatNumber(s.mqlRate)} opens</p>
                     </div>
-                    <p className="text-accent-red text-sm font-mono font-medium">{s.wonRevenue ? formatCurrency(s.wonRevenue) : '—'}</p>
+                    <p className="text-accent-red text-sm font-mono font-medium shrink-0">{formatNumber(s.sqlRate)} unsubs</p>
                   </div>
                 ))}
               </div>
