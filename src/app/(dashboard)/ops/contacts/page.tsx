@@ -41,6 +41,10 @@ async function getContactsData(campaigns: string[], dateRange: string) {
 
     const campaignFilter = campaignSqlFilter(campaigns, 'AND', 'ua.campaign_name')
     const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
+    // When campaigns are selected, restrict the prospect list to those who appeared in those campaigns
+    const prospectCampaignFilter = campaigns.length > 0
+      ? `AND p.id IN (SELECT DISTINCT prospect_id FROM ${t('Pardot_userActivity')} ${campaignSqlFilter(campaigns, 'WHERE', 'campaign_name')})`
+      : ''
 
     const rows = await bqQuery<ProspectRow>(`
       WITH prospect_activity AS (
@@ -78,6 +82,7 @@ async function getContactsData(campaigns: string[], dateRange: string) {
         COALESCE(pa.total_sent, 0)          AS total_sent
       FROM ${t('Pardot_Prospects')} p
       LEFT JOIN prospect_activity pa ON pa.prospect_id = p.id
+      WHERE 1=1 ${prospectCampaignFilter}
       ORDER BY score DESC
     `)
 
@@ -125,7 +130,7 @@ const bucketConfig = [
   {
     key: 'hot',
     label: 'Hot',
-    description: 'Highly engaged, ready for sales action',
+    description: 'Clicked an email in the last 90 days — highest intent, ready for sales action',
     color: 'text-accent-red',
     bg: 'bg-accent-red/10 border-accent-red/20',
     icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z',
@@ -133,7 +138,7 @@ const bucketConfig = [
   {
     key: 'warm',
     label: 'Warm',
-    description: 'Moderate engagement, nurture active',
+    description: 'Opened emails in the last 90 days but hasn\'t clicked — nurture is working, needs a stronger CTA',
     color: 'text-accent-yellow',
     bg: 'bg-accent-yellow/10 border-accent-yellow/20',
     icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z',
@@ -141,7 +146,7 @@ const bucketConfig = [
   {
     key: 'cold',
     label: 'Cold',
-    description: 'Low recent engagement',
+    description: 'Has received emails but no opens or clicks in the last 90 days — still within re-engagement window (< 180d)',
     color: 'text-pulse-300',
     bg: 'bg-pulse-blue/8 border-pulse-blue/15',
     icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z',
@@ -149,7 +154,7 @@ const bucketConfig = [
   {
     key: 'inactive',
     label: 'Inactive',
-    description: 'No activity in defined window',
+    description: 'Never received an email — in Pardot but not yet entered into any nurture sequence',
     color: 'text-white/30',
     bg: 'bg-graphite-700 border-white/5',
     icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 5h2v6h-2zm0 8h2v2h-2z',
@@ -157,7 +162,7 @@ const bucketConfig = [
   {
     key: 'suppression',
     label: 'Suppression Candidates',
-    description: 'Bounced, unsubbed, or chronic non-responders',
+    description: 'Unsubscribed or bounced — should be excluded from sends to protect deliverability',
     color: 'text-accent-red',
     bg: 'bg-accent-red/5 border-accent-red/10',
     icon: 'M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z',
@@ -165,7 +170,7 @@ const bucketConfig = [
   {
     key: 'recycle',
     label: 'Recycle Candidates',
-    description: 'Aged contacts eligible for re-engagement',
+    description: 'Received emails but no activity in over 180 days — eligible for a re-engagement or win-back campaign',
     color: 'text-accent-green',
     bg: 'bg-accent-green/8 border-accent-green/15',
     icon: 'M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z',
@@ -187,6 +192,7 @@ export default async function ContactsPage({
   const isLive = !!data?.connected
   const buckets: Record<string, number> = data?.buckets ?? { hot: 0, warm: 0, cold: 0, inactive: 0, suppression: 0, recycle: 0 }
   const prospectRows = data?.prospects ?? []
+  const totalProspects = Object.values(buckets).reduce((s, n) => s + n, 0)
 
   return (
     <div className="flex flex-col min-h-full">
@@ -207,32 +213,27 @@ export default async function ContactsPage({
 
         {/* Bucket cards */}
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-          {bucketConfig.map((b) => (
-            <div key={b.key} className={`rounded-xl border p-5 ${b.bg}`}>
-              <div className="flex items-start justify-between mb-3">
-                <p className={`text-xs font-mono uppercase tracking-widest ${b.color}`}>{b.label}</p>
-                <svg className={`w-4 h-4 ${b.color} opacity-60`} viewBox="0 0 24 24" fill="currentColor">
-                  <path d={b.icon} />
-                </svg>
+          {bucketConfig.map((b) => {
+            const count = buckets[b.key] ?? 0
+            const pct = totalProspects > 0 ? ((count / totalProspects) * 100).toFixed(1) : '0.0'
+            return (
+              <div key={b.key} className={`rounded-xl border p-5 ${b.bg}`}>
+                <div className="flex items-start justify-between mb-3">
+                  <p className={`text-xs font-mono uppercase tracking-widest ${b.color}`}>{b.label}</p>
+                  <svg className={`w-4 h-4 ${b.color} opacity-60`} viewBox="0 0 24 24" fill="currentColor">
+                    <path d={b.icon} />
+                  </svg>
+                </div>
+                <div className="flex items-end gap-3 mb-2">
+                  <p className="text-white font-bold text-3xl leading-none">{formatNumber(count)}</p>
+                  <p className={`text-lg font-mono font-semibold leading-none mb-0.5 ${b.color} opacity-70`}>{pct}%</p>
+                </div>
+                <p className="text-white/30 text-xs leading-relaxed">{b.description}</p>
               </div>
-              <p className="text-white font-bold text-3xl mb-1">{formatNumber(buckets[b.key] ?? 0)}</p>
-              <p className="text-white/30 text-xs">{b.description}</p>
-            </div>
-          ))}
+            )
+          })}
         </div>
 
-        {/* Notice */}
-        <div className="bg-graphite-800 border border-white/5 rounded-xl p-5 flex gap-4 items-start">
-          <svg className="w-5 h-5 text-pulse-blue shrink-0 mt-0.5" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
-          </svg>
-          <div>
-            <p className="text-white text-sm font-medium mb-1">Phase 0 Required for Contact Scoring</p>
-            <p className="text-white/40 text-sm leading-relaxed">
-              Contact buckets are currently based on preliminary rules. Once Phase 0 discovery is complete and field definitions (engaged contact, inactivity window) are admin-approved, scoring will update automatically with confirmed logic.
-            </p>
-          </div>
-        </div>
 
         {/* Prospect Activity */}
         <div>

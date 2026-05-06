@@ -87,9 +87,10 @@ function sqlList(values: string[]): string {
   return values.map(v => `'${v.replace(/'/g, "''")}'`).join(', ')
 }
 
-// AND/WHERE fragment to filter rows by campaign_name (or aliased column)
+// AND/WHERE fragment to filter rows by campaign_name (or aliased column).
+// When no campaigns are selected, defaults to NS sequences + newsletters.
 export function campaignSqlFilter(campaigns: string[], prefix = 'AND', column = 'campaign_name'): string {
-  if (campaigns.length === 0) return ''
+  if (campaigns.length === 0) return `${prefix} (${column} LIKE 'NS |%' OR LOWER(${column}) LIKE '%newsletter%')`
   if (campaigns.length === 1) return `${prefix} ${column} = '${campaigns[0].replace(/'/g, "''")}'`
   return `${prefix} ${column} IN (${sqlList(campaigns)})`
 }
