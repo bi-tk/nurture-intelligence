@@ -2,8 +2,6 @@ import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import {
   bqQuery, t, pct, isConfigured,
-  EMAIL_SENT_EXPR, EMAIL_OPEN_EXPR, EMAIL_CLICK_EXPR,
-  EMAIL_BOUNCE_EXPR, EMAIL_UNSUB_EXPR,
   campaignSqlFilter, dateIntervalFilter,
 } from '@/lib/bigquery'
 import SegmentTables from '@/components/tables/SegmentTables'
@@ -48,14 +46,25 @@ function extractSegmentCode(name: string): string | null {
   return null
 }
 
-interface CampaignRow {
-  campaign_name: string
+interface SegmentRow {
+  segment_name: string
+  members: bigint | number
   sent: bigint | number; opens: bigint | number
   clicks: bigint | number; bounces: bigint | number; unsubs: bigint | number
 }
 
-interface MemberCountRow { code: string; members: bigint | number }
-interface IndustryRow { Industry: string; cnt: bigint | number }
+interface CampaignFunnelRow {
+  campaign_name: string
+  mqls: bigint | number; sqls: bigint | number; won_revenue: number | null
+}
+
+interface IndustryRow {
+  industry: string
+  members: bigint | number
+  sent: bigint | number; opens: bigint | number
+  clicks: bigint | number; bounces: bigint | number; unsubs: bigint | number
+  mqls: bigint | number; sqls: bigint | number; won_revenue: number | null
+}
 
 async function getSegmentsData(campaigns: string[], dateRange: string) {
   try {
@@ -68,84 +77,232 @@ async function getSegmentsData(campaigns: string[], dateRange: string) {
       }
     }
 
-    const campaignFilter = campaigns.length > 0
-      ? campaignSqlFilter(campaigns)
-      : `AND campaign_name LIKE 'NS |%'`
+    const uaCampaignFilter = campaigns.length > 0
+      ? campaignSqlFilter(campaigns, 'AND', 'ua.campaign_name')
+      : `AND ua.campaign_name LIKE 'NS |%'`
+    const uaDateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
 
-    const [campaignRows, memberRows, industryRows] = await Promise.all([
-      bqQuery<CampaignRow>(`
+    const [segmentRows, campaignFunnelRows, industryRows] = await Promise.all([
+
+      // Segment member counts + email stats — join Pardot_Prospects → Pardot_userActivity
+      bqQuery<SegmentRow>(`
         SELECT
-          campaign_name,
-          ${EMAIL_SENT_EXPR}   AS sent,
-          ${EMAIL_OPEN_EXPR}   AS opens,
-          ${EMAIL_CLICK_EXPR}  AS clicks,
-          ${EMAIL_BOUNCE_EXPR} AS bounces,
-          ${EMAIL_UNSUB_EXPR}  AS unsubs
-        FROM ${t('Pardot_userActivity')}
-        WHERE campaign_name IS NOT NULL AND campaign_name != ''
-          ${campaignFilter}
-          ${dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')}
-        GROUP BY campaign_name
-        HAVING ${EMAIL_SENT_EXPR} >= 10
+          pp.segment_name,
+          COUNT(DISTINCT pp.id)                                                         AS members,
+          COUNTIF(ua.type = 6)                                                          AS sent,
+          COUNTIF(ua.type = 11)                                                         AS opens,
+          COUNTIF((ua.type = 1 AND ua.type_name = 'Email Tracker') OR ua.type = 17)    AS clicks,
+          COUNTIF(ua.type IN (13, 36))                                                  AS bounces,
+          COUNTIF(ua.type IN (12, 35))                                                  AS unsubs
+        FROM (
+          SELECT id, TRIM(SPLIT(pardot_segments, ',')[OFFSET(0)]) AS segment_name
+          FROM ${t('Pardot_Prospects')}
+          WHERE pardot_segments IS NOT NULL
+            AND pardot_segments != ''
+            AND LOWER(TRIM(pardot_segments)) != 'nan'
+        ) pp
+        LEFT JOIN ${t('Pardot_userActivity')} ua
+          ON ua.prospect_id = pp.id
+          ${uaCampaignFilter}
+          ${uaDateFilter}
+        GROUP BY pp.segment_name
+        HAVING COUNT(DISTINCT pp.id) > 0
+        ORDER BY members DESC
       `),
-      bqQuery<MemberCountRow>(`
+
+      // MQL / SQL / Won Revenue per campaign — same CTE pattern as sequences page
+      bqQuery<CampaignFunnelRow>(`
+        WITH mql_per_campaign AS (
+          SELECT DISTINCT ua.campaign_name, LOWER(pp.email) AS email
+          FROM ${t('Pardot_userActivity')} ua
+          JOIN ${t('Pardot_Prospects')} pp ON pp.id = ua.prospect_id
+          WHERE ua.type = 4
+            AND ua.type_name IN ('Form', 'Form Handler')
+            AND ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
+            AND NOT REGEXP_CONTAINS(LOWER(pp.email), r'test|tkxel|work|uzair|sami')
+            ${uaCampaignFilter}
+            ${uaDateFilter}
+        ),
+        sf_by_email AS (
+          SELECT
+            LOWER(Email) AS email,
+            MAX(CASE WHEN SQL__c = TRUE THEN 1 ELSE 0 END) AS is_sql,
+            SUM(CASE WHEN IsWon = TRUE THEN COALESCE(Amount, 0) ELSE 0 END) AS won_amount
+          FROM ${t('Leads_Opp_Joined')}
+          WHERE Email IS NOT NULL
+            AND NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
+          GROUP BY LOWER(Email)
+        )
         SELECT
-          TRIM(SPLIT(pardot_segments, ',')[OFFSET(0)]) AS code,
-          COUNT(*) AS members
-        FROM ${t('Pardot_Prospects')}
-        WHERE pardot_segments IS NOT NULL AND pardot_segments != ''
-        GROUP BY code
+          m.campaign_name,
+          COUNT(DISTINCT m.email)                                   AS mqls,
+          COUNT(DISTINCT CASE WHEN sf.is_sql = 1 THEN m.email END) AS sqls,
+          COALESCE(SUM(sf.won_amount), 0)                          AS won_revenue
+        FROM mql_per_campaign m
+        LEFT JOIN sf_by_email sf ON sf.email = m.email
+        GROUP BY m.campaign_name
       `),
+
+      // Industry: members + email stats + MQL/SQL/Won in one CTE query
       bqQuery<IndustryRow>(`
-        SELECT Industry, COUNT(*) AS cnt
-        FROM ${t('Leads')}
-        WHERE Industry IS NOT NULL AND Industry != ''
-        GROUP BY Industry
-        ORDER BY cnt DESC
-
+        WITH email_stats AS (
+          SELECT
+            LOWER(pp.email) AS email,
+            SUM(IF(ua.type = 6, 1, 0))                                                       AS sent,
+            SUM(IF(ua.type = 11, 1, 0))                                                      AS opens,
+            SUM(IF((ua.type = 1 AND ua.type_name = 'Email Tracker') OR ua.type = 17, 1, 0)) AS clicks,
+            SUM(IF(ua.type IN (13, 36), 1, 0))                                               AS bounces,
+            SUM(IF(ua.type IN (12, 35), 1, 0))                                               AS unsubs,
+            MAX(IF(ua.type = 4 AND ua.type_name IN ('Form', 'Form Handler'), 1, 0))          AS is_mql
+          FROM ${t('Pardot_userActivity')} ua
+          JOIN ${t('Pardot_Prospects')} pp ON pp.id = ua.prospect_id
+          WHERE ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
+            AND NOT REGEXP_CONTAINS(LOWER(pp.email), r'test|tkxel|work|uzair|sami')
+            ${uaCampaignFilter}
+            ${uaDateFilter}
+          GROUP BY LOWER(pp.email)
+        ),
+        sf_email AS (
+          SELECT
+            LOWER(Email) AS email,
+            Industry,
+            MAX(IF(SQL__c = TRUE, 1, 0))                              AS is_sql,
+            SUM(IF(IsWon = TRUE, COALESCE(Amount, 0), 0))            AS won_amount
+          FROM ${t('Leads_Opp_Joined')}
+          WHERE Industry IS NOT NULL AND Industry != ''
+            AND Industry NOT IN ('Other', 'No Match')
+            AND Email IS NOT NULL
+            AND NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
+          GROUP BY LOWER(Email), Industry
+        )
+        SELECT
+          sf.Industry                                                      AS industry,
+          COUNT(DISTINCT sf.email)                                         AS members,
+          COALESCE(SUM(es.sent), 0)                                        AS sent,
+          COALESCE(SUM(es.opens), 0)                                       AS opens,
+          COALESCE(SUM(es.clicks), 0)                                      AS clicks,
+          COALESCE(SUM(es.bounces), 0)                                     AS bounces,
+          COALESCE(SUM(es.unsubs), 0)                                      AS unsubs,
+          COUNT(DISTINCT IF(es.is_mql = 1, sf.email, NULL))               AS mqls,
+          COUNT(DISTINCT IF(sf.is_sql = 1, sf.email, NULL))               AS sqls,
+          COALESCE(SUM(sf.won_amount), 0)                                  AS won_revenue
+        FROM sf_email sf
+        LEFT JOIN email_stats es ON es.email = sf.email
+        GROUP BY sf.Industry
+        ORDER BY members DESC
       `),
     ])
 
-    const memberMap = new Map<string, number>()
-    for (const r of memberRows) memberMap.set(String(r.code), Number(r.members))
-
-    const segStats: Record<string, { sent: number; delivered: number; opens: number; clicks: number; bounces: number; unsubs: number }> = {}
-    for (const code of SEGMENT_CODE_ORDER) {
-      segStats[code] = { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 }
+    // Build funnel lookup by campaign_name
+    const funnelMap = new Map<string, { mqls: number; sqls: number; wonRevenue: number }>()
+    for (const r of campaignFunnelRows) {
+      funnelMap.set(r.campaign_name, {
+        mqls: Number(r.mqls),
+        sqls: Number(r.sqls),
+        wonRevenue: Number(r.won_revenue ?? 0),
+      })
     }
 
-    for (const r of campaignRows) {
-      const code = extractSegmentCode(r.campaign_name)
-      if (!code || !segStats[code]) continue
+    // Aggregate segment stats from the Pardot join query
+    const segStats: Record<string, { members: number; sent: number; delivered: number; opens: number; clicks: number; bounces: number; unsubs: number; mqls: number; sqls: number; wonRevenue: number }> = {}
+    for (const code of SEGMENT_CODE_ORDER) {
+      segStats[code] = { members: 0, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0, mqls: 0, sqls: 0, wonRevenue: 0 }
+    }
+
+    let newsletterMembers = 0
+    let newsletterStats = { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0, mqls: 0, sqls: 0, wonRevenue: 0 }
+
+    for (const r of segmentRows) {
+      const code = extractSegmentCode(r.segment_name)
       const sent = Number(r.sent)
       const bounces = Number(r.bounces)
-      segStats[code].sent += sent
-      segStats[code].delivered += Math.max(0, sent - bounces)
-      segStats[code].opens += Number(r.opens)
-      segStats[code].clicks += Number(r.clicks)
-      segStats[code].bounces += bounces
-      segStats[code].unsubs += Number(r.unsubs)
+      const delivered = Math.max(0, sent - bounces)
+      if (code && segStats[code]) {
+        segStats[code].members += Number(r.members)
+        segStats[code].sent += sent
+        segStats[code].delivered += delivered
+        segStats[code].opens += Number(r.opens)
+        segStats[code].clicks += Number(r.clicks)
+        segStats[code].bounces += bounces
+        segStats[code].unsubs += Number(r.unsubs)
+      } else if (
+        r.segment_name.toLowerCase().includes('newsletter') ||
+        r.segment_name.toLowerCase().includes('future interest') ||
+        r.segment_name === NEWSLETTER_NAME
+      ) {
+        newsletterMembers += Number(r.members)
+        newsletterStats.sent += sent
+        newsletterStats.delivered += delivered
+        newsletterStats.opens += Number(r.opens)
+        newsletterStats.clicks += Number(r.clicks)
+        newsletterStats.bounces += bounces
+        newsletterStats.unsubs += Number(r.unsubs)
+      }
+    }
+
+    // Add funnel metrics to segments by matching campaign_name → segment code
+    for (const [campaignName, funnel] of funnelMap) {
+      const code = extractSegmentCode(campaignName)
+      if (code && segStats[code]) {
+        segStats[code].mqls += funnel.mqls
+        segStats[code].sqls += funnel.sqls
+        segStats[code].wonRevenue += funnel.wonRevenue
+      }
     }
 
     const segments: StatsRow[] = SEGMENT_CODE_ORDER.map(code => {
       const name = SEGMENT_NAME_MAP[code] ?? code
-      const members = memberMap.get(code) ?? 0
       const st = segStats[code]
-      if (!st || st.sent === 0) return emptyRow(name, members)
+      if (!st || st.members === 0) return emptyRow(name, 0)
       return {
-        name, members,
+        name, members: st.members,
         sent: st.sent, delivered: st.delivered, opens: st.opens, clicks: st.clicks, bounces: st.bounces,
         deliveryRate: pct(st.delivered, st.sent),
         openRate: pct(st.opens, st.delivered),
         clickRate: pct(st.clicks, st.delivered),
         ctr: pct(st.clicks, st.opens),
         unsubRate: pct(st.unsubs, st.delivered),
-        mqlRate: 0, sqlRate: 0, wonRevenue: 0,
+        mqlRate: pct(st.mqls, st.delivered),
+        sqlRate: pct(st.sqls, st.delivered),
+        wonRevenue: st.wonRevenue,
       }
     }).sort((a, b) => b.members - a.members)
 
-    const newsletter = emptyRow(NEWSLETTER_NAME, memberMap.get('newsletter') ?? memberMap.get(NEWSLETTER_NAME) ?? 0)
-    const industries: StatsRow[] = industryRows.map(r => emptyRow(String(r.Industry), Number(r.cnt)))
+    const ns = newsletterStats
+    const newsletter: StatsRow = {
+      name: NEWSLETTER_NAME,
+      members: newsletterMembers,
+      sent: ns.sent, delivered: ns.delivered, opens: ns.opens, clicks: ns.clicks, bounces: ns.bounces,
+      deliveryRate: pct(ns.delivered, ns.sent),
+      openRate: pct(ns.opens, ns.delivered),
+      clickRate: pct(ns.clicks, ns.delivered),
+      ctr: pct(ns.clicks, ns.opens),
+      unsubRate: pct(ns.unsubs, ns.delivered),
+      mqlRate: pct(ns.mqls, ns.delivered),
+      sqlRate: pct(ns.sqls, ns.delivered),
+      wonRevenue: ns.wonRevenue,
+    }
+
+    const industries: StatsRow[] = industryRows.map(r => {
+      const sent = Number(r.sent)
+      const bounces = Number(r.bounces)
+      const delivered = Math.max(0, sent - bounces)
+      const mqls = Number(r.mqls)
+      const sqls = Number(r.sqls)
+      return {
+        name: String(r.industry),
+        members: Number(r.members),
+        sent, delivered, opens: Number(r.opens), clicks: Number(r.clicks), bounces,
+        deliveryRate: pct(delivered, sent),
+        openRate: pct(Number(r.opens), delivered),
+        clickRate: pct(Number(r.clicks), delivered),
+        ctr: pct(Number(r.clicks), Number(r.opens)),
+        unsubRate: pct(Number(r.unsubs), delivered),
+        mqlRate: pct(mqls, delivered),
+        sqlRate: pct(sqls, delivered),
+        wonRevenue: Number(r.won_revenue ?? 0),
+      }
+    })
 
     return { segments, newsletter, industries, sfConnected: true, pardotConnected: true }
   } catch (e) {
