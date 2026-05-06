@@ -23,7 +23,6 @@ export interface StatsRow {
 
 const segmentColumns: Column[] = [
   { key: 'name', label: 'Segment', format: (v) => <p className="truncate max-w-[240px] text-white whitespace-nowrap">{String(v ?? '')}</p> },
-  { key: 'members', label: 'Members', format: (v) => <span className="text-white/70 font-mono">{Number(v) > 0 ? formatNumber(Number(v)) : '—'}</span> },
   { key: 'sent', label: 'Sent', format: (v) => <span className="text-white/60 font-mono">{Number(v) > 0 ? formatNumber(Number(v)) : '—'}</span> },
   { key: 'delivered', label: 'Delivered', format: (v) => <span className="text-white/70 font-mono">{Number(v) > 0 ? formatNumber(Number(v)) : '—'}</span> },
   { key: 'opens', label: 'Opens', format: (v) => <span className="text-white/60 font-mono">{Number(v) > 0 ? formatNumber(Number(v)) : '—'}</span> },
@@ -87,10 +86,10 @@ export default function SegmentTables({
         <SortableTable
           columns={segmentColumns}
           rows={segments as unknown as Record<string, unknown>[]}
-          defaultSort="members"
+          defaultSort="sent"
           defaultDir="desc"
           emptyMessage="No nurture segments found — connect Pardot to see segment performance"
-          maxHeight="480px"
+          maxHeight="600px"
         />
       </TableCard>
 
