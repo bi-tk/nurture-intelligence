@@ -308,9 +308,6 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
   try {
     if (!isConfigured()) return null
 
-    const leadDate = dateIntervalFilter(dateRange, 'CreatedDate')
-    const sfFilter = leadsCampaignFilter(campaigns)
-
     interface SegRow {
       segment_name: string; members: bigint | number
       sent: bigint | number; opens: bigint | number
@@ -318,14 +315,18 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
     }
     interface IndRow {
       industry: string
-      mqls: bigint | number; sqls: bigint | number
-      discovery_calls: bigint | number; opportunities: bigint | number; won: bigint | number
+      members: bigint | number
+      sent: bigint | number; opens: bigint | number
+      clicks: bigint | number; bounces: bigint | number; unsubs: bigint | number
+      mqls: bigint | number; sqls: bigint | number; won_revenue: number | null
     }
 
     const uaCampaign = campaigns.length > 0
       ? `AND ua.campaign_name IN (${campaigns.map(c => `'${c.replace(/'/g, "''")}'`).join(', ')})`
       : ''
     const uaDate = dateIntervalFilter(dateRange, 'TIMESTAMP(ua.created_at)')
+    const campaignFilter = campaignSqlFilter(campaigns)
+    const dateFilter = dateIntervalFilter(dateRange, 'TIMESTAMP(created_at)')
 
     const [segRows, indRows] = await Promise.all([
       bqQuery<SegRow>(`
@@ -350,24 +351,68 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
         GROUP BY pp.segment_name
         HAVING COUNT(DISTINCT pp.id) > 0
         ORDER BY members DESC
-
       `),
-      bqQuery<IndRow>(`
-        SELECT
-          Industry AS industry,
-          COUNT(DISTINCT Email) AS mqls,
-          COUNT(DISTINCT CASE WHEN SQL__c = TRUE THEN Email END) AS sqls,
-          COUNT(DISTINCT CASE WHEN Discovery_Call__c = TRUE THEN Email END) AS discovery_calls,
-          COUNT(DISTINCT CASE WHEN IsConverted = TRUE THEN Email END) AS opportunities,
-          COUNT(DISTINCT CASE WHEN IsWon = TRUE THEN Email END) AS won
-        FROM ${t('Leads_Opp_Joined')}
-        WHERE Industry IS NOT NULL AND Industry != ''
-          AND Industry NOT IN ('Other', 'No Match')
-          ${sfFilter}
-          ${leadDate}
-        GROUP BY Industry
-        ORDER BY mqls DESC, sqls DESC
 
+      // Industry — same logic as segments page
+      bqQuery<IndRow>(`
+        WITH prospect_base AS (
+          SELECT id, LOWER(email) AS email, industry
+          FROM ${t('Pardot_Prospects')}
+          WHERE industry IS NOT NULL AND industry != ''
+            AND NOT REGEXP_CONTAINS(LOWER(email), r'test|tkxel|work|uzair|sami')
+        ),
+        email_stats AS (
+          SELECT
+            ua.prospect_id,
+            SUM(IF(ua.type = 6, 1, 0))                                                       AS sent,
+            SUM(IF(ua.type = 11, 1, 0))                                                      AS opens,
+            SUM(IF((ua.type = 1 AND ua.type_name = 'Email Tracker') OR ua.type = 17, 1, 0)) AS clicks,
+            SUM(IF(ua.type IN (13, 36), 1, 0))                                               AS bounces,
+            SUM(IF(ua.type IN (12, 35), 1, 0))                                               AS unsubs
+          FROM ${t('Pardot_userActivity')} ua
+          WHERE ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
+            ${uaCampaign}
+            ${uaDate}
+          GROUP BY ua.prospect_id
+        ),
+        mql_emails AS (
+          SELECT DISTINCT LOWER(pp.email) AS email
+          FROM ${t('Pardot_userActivity')} ua
+          JOIN ${t('Pardot_Prospects')} pp ON pp.id = ua.prospect_id
+          WHERE ua.type = 4
+            AND ua.type_name IN ('Form', 'Form Handler')
+            AND ua.campaign_name IS NOT NULL AND ua.campaign_name != ''
+            AND NOT REGEXP_CONTAINS(LOWER(pp.email), r'test|tkxel|work|uzair|sami')
+            ${uaCampaign}
+            ${uaDate}
+        ),
+        sf_by_email AS (
+          SELECT
+            LOWER(Email) AS email,
+            MAX(IF(SQL__c = TRUE, 1, 0))                   AS is_sql,
+            SUM(IF(IsWon = TRUE, COALESCE(Amount, 0), 0)) AS won_amount
+          FROM ${t('Leads_Opp_Joined')}
+          WHERE Email IS NOT NULL
+            AND NOT REGEXP_CONTAINS(LOWER(Email), r'test|tkxel|work|uzair|sami')
+          GROUP BY LOWER(Email)
+        )
+        SELECT
+          pb.industry,
+          COUNT(DISTINCT pb.id)                                                        AS members,
+          COALESCE(SUM(es.sent), 0)                                                    AS sent,
+          COALESCE(SUM(es.opens), 0)                                                   AS opens,
+          COALESCE(SUM(es.clicks), 0)                                                  AS clicks,
+          COALESCE(SUM(es.bounces), 0)                                                 AS bounces,
+          COALESCE(SUM(es.unsubs), 0)                                                  AS unsubs,
+          COUNT(DISTINCT IF(me.email IS NOT NULL, pb.email, NULL))                     AS mqls,
+          COUNT(DISTINCT IF(me.email IS NOT NULL AND sf.is_sql = 1, pb.email, NULL))   AS sqls,
+          COALESCE(SUM(IF(me.email IS NOT NULL, sf.won_amount, 0)), 0)                 AS won_revenue
+        FROM prospect_base pb
+        LEFT JOIN email_stats es ON es.prospect_id = pb.id
+        LEFT JOIN mql_emails me ON me.email = pb.email
+        LEFT JOIN sf_by_email sf ON sf.email = pb.email
+        GROUP BY pb.industry
+        ORDER BY members DESC
       `),
     ])
 
@@ -385,14 +430,23 @@ async function fetchSegments(campaigns: string[], dateRange: string) {
       }
     })
 
-    const industries = indRows.map(r => ({
-      name: String(r.industry),
-      mqls: Number(r.mqls),
-      sqls: Number(r.sqls),
-      discoveryCalls: Number(r.discovery_calls),
-      opportunities: Number(r.opportunities),
-      won: Number(r.won),
-    }))
+    const industries = indRows.map(r => {
+      const sent = Number(r.sent)
+      const bounces = Number(r.bounces)
+      const delivered = Math.max(0, sent - bounces)
+      const opens = Number(r.opens)
+      return {
+        name: String(r.industry),
+        members: Number(r.members),
+        sent,
+        delivered,
+        opens,
+        openRate: pct(opens, delivered),
+        mqls: Number(r.mqls),
+        sqls: Number(r.sqls),
+        wonRevenue: Number(r.won_revenue ?? 0),
+      }
+    })
     return { segments, industries }
   } catch { return null }
 }
@@ -653,10 +707,12 @@ export default async function ExecutivePage({
                   <thead className="sticky top-0 bg-graphite-800">
                     <tr className="text-white/25 text-xs font-mono">
                       <th className="text-left pb-3">Industry</th>
+                      <th className="text-right pb-3">Members</th>
+                      <th className="text-right pb-3">Sent</th>
+                      <th className="text-right pb-3">Opens</th>
+                      <th className="text-right pb-3">Open %</th>
                       <th className="text-right pb-3">MQL</th>
                       <th className="text-right pb-3">SQL</th>
-                      <th className="text-right pb-3">DC</th>
-                      <th className="text-right pb-3">Opp</th>
                       <th className="text-right pb-3">Won</th>
                     </tr>
                   </thead>
@@ -664,11 +720,13 @@ export default async function ExecutivePage({
                     {topIndustries.map((ind) => (
                       <tr key={ind.name} className="text-white/70">
                         <td className="py-2.5">{ind.name}</td>
-                        <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.mqls}</td>
-                        <td className="text-right py-2.5 font-mono">{ind.sqls}</td>
-                        <td className="text-right py-2.5 font-mono">{ind.discoveryCalls}</td>
-                        <td className="text-right py-2.5 font-mono">{ind.opportunities}</td>
-                        <td className="text-right py-2.5 font-mono text-accent-green">{ind.won}</td>
+                        <td className="text-right py-2.5 font-mono">{formatNumber(ind.members)}</td>
+                        <td className="text-right py-2.5 font-mono">{ind.sent > 0 ? formatNumber(ind.sent) : '—'}</td>
+                        <td className="text-right py-2.5 font-mono">{ind.opens > 0 ? formatNumber(ind.opens) : '—'}</td>
+                        <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.openRate > 0 ? formatPercent(ind.openRate) : '—'}</td>
+                        <td className="text-right py-2.5 font-mono">{ind.mqls > 0 ? ind.mqls : '—'}</td>
+                        <td className="text-right py-2.5 font-mono">{ind.sqls > 0 ? ind.sqls : '—'}</td>
+                        <td className="text-right py-2.5 font-mono text-accent-green">{ind.wonRevenue > 0 ? formatCurrency(ind.wonRevenue) : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
