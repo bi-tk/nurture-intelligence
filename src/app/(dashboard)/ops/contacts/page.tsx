@@ -234,18 +234,6 @@ export default async function ContactsPage({
           })}
         </div>
 
-        {/* Notice */}
-        <div className="bg-graphite-800 border border-white/5 rounded-xl p-5 flex gap-4 items-start">
-          <svg className="w-5 h-5 text-pulse-blue shrink-0 mt-0.5" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
-          </svg>
-          <div>
-            <p className="text-white text-sm font-medium mb-1">Phase 0 Required for Contact Scoring</p>
-            <p className="text-white/40 text-sm leading-relaxed">
-              Contact buckets are currently based on preliminary rules. Once Phase 0 discovery is complete and field definitions (engaged contact, inactivity window) are admin-approved, scoring will update automatically with confirmed logic.
-            </p>
-          </div>
-        </div>
 
         {/* Prospect Activity */}
         <div>
