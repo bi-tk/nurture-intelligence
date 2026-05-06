@@ -249,9 +249,10 @@ async function getSegmentsData(campaigns: string[], dateRange: string) {
       }
     }
 
-    // Add funnel metrics to segments — funnelMap is already keyed by segment_code
-    for (const [code, funnel] of funnelMap) {
-      if (segStats[code]) {
+    // Add funnel metrics — funnelMap keys are raw pardot_segments values; resolve to clean code
+    for (const [rawCode, funnel] of funnelMap) {
+      const code = extractSegmentCode(rawCode)
+      if (code && segStats[code]) {
         segStats[code].mqls += funnel.mqls
         segStats[code].sqls += funnel.sqls
         segStats[code].wonRevenue += funnel.wonRevenue
