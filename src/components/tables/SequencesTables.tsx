@@ -32,6 +32,7 @@ export interface SequenceRow {
 
 export interface SubjectLineRow {
   subject: string
+  campaign: string
   sent: number
   opens: number
   openRate: number
@@ -120,7 +121,8 @@ const sequenceColumns: Column[] = [
 ]
 
 const subjectColumns: Column[] = [
-  { key: 'subject', label: 'Subject Line', format: (v) => <p className="truncate max-w-[320px] text-white/80">{String(v ?? '')}</p> },
+  { key: 'subject', label: 'Subject Line', format: (v) => <p className="truncate max-w-[280px] text-white/80">{String(v ?? '')}</p> },
+  { key: 'campaign', label: 'Campaign', format: (v) => <p className="truncate max-w-[200px] text-white/40 text-xs">{String(v ?? '')}</p> },
   { key: 'sent', label: 'Sent', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },
   { key: 'opens', label: 'Opens', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },
   { key: 'openRate', label: 'Open %', format: (v) => <MetricCell value={Number(v ?? 0)} warn={20} bad={15} invert={false} /> },

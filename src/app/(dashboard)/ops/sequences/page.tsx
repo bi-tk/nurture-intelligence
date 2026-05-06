@@ -73,6 +73,7 @@ interface CampaignFunnelRow {
 
 interface SubjectLineQueryRow {
   details: string
+  campaign_name: string
   sent: bigint | number
   opens: bigint | number
   unsubs: bigint | number
@@ -161,6 +162,7 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
       bqQuery<SubjectLineQueryRow>(`
         SELECT
           details,
+          campaign_name,
           COUNTIF(type = 6)         AS sent,
           COUNTIF(type = 11)        AS opens,
           COUNTIF(type IN (12, 35)) AS unsubs,
@@ -170,7 +172,7 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
           AND campaign_name IS NOT NULL AND campaign_name != ''
           ${campaignFilter}
           ${dateFilter}
-        GROUP BY details
+        GROUP BY details, campaign_name
         HAVING COUNTIF(type = 6) >= 1
         ORDER BY opens DESC
       `),
@@ -263,6 +265,7 @@ async function getSequencesData(campaigns: string[], dateRange: string) {
       const bounces = Number(r.bounces)
       return {
         subject: String(r.details),
+        campaign: String(r.campaign_name),
         sent,
         opens,
         openRate: pct(opens, sent),
