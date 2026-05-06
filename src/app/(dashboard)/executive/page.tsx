@@ -707,12 +707,8 @@ export default async function ExecutivePage({
                   <thead className="sticky top-0 bg-graphite-800">
                     <tr className="text-white/25 text-xs font-mono">
                       <th className="text-left pb-3">Industry</th>
-                      <th className="text-right pb-3">Members</th>
-                      <th className="text-right pb-3">Sent</th>
-                      <th className="text-right pb-3">Opens</th>
                       <th className="text-right pb-3">Open %</th>
                       <th className="text-right pb-3">MQL</th>
-                      <th className="text-right pb-3">SQL</th>
                       <th className="text-right pb-3">Won</th>
                     </tr>
                   </thead>
@@ -720,12 +716,8 @@ export default async function ExecutivePage({
                     {topIndustries.map((ind) => (
                       <tr key={ind.name} className="text-white/70">
                         <td className="py-2.5">{ind.name}</td>
-                        <td className="text-right py-2.5 font-mono">{formatNumber(ind.members)}</td>
-                        <td className="text-right py-2.5 font-mono">{ind.sent > 0 ? formatNumber(ind.sent) : '—'}</td>
-                        <td className="text-right py-2.5 font-mono">{ind.opens > 0 ? formatNumber(ind.opens) : '—'}</td>
                         <td className="text-right py-2.5 font-mono text-pulse-blue">{ind.openRate > 0 ? formatPercent(ind.openRate) : '—'}</td>
                         <td className="text-right py-2.5 font-mono">{ind.mqls > 0 ? ind.mqls : '—'}</td>
-                        <td className="text-right py-2.5 font-mono">{ind.sqls > 0 ? ind.sqls : '—'}</td>
                         <td className="text-right py-2.5 font-mono text-accent-green">{ind.wonRevenue > 0 ? formatCurrency(ind.wonRevenue) : '—'}</td>
                       </tr>
                     ))}
