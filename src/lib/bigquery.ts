@@ -88,11 +88,12 @@ function sqlList(values: string[]): string {
 }
 
 // AND/WHERE fragment to filter rows by campaign_name (or aliased column).
-// When no campaigns are selected, defaults to NS sequences only.
-export function campaignSqlFilter(campaigns: string[], prefix = 'AND', column = 'campaign_name'): string {
-  if (campaigns.length === 0) return `${prefix} ${column} LIKE 'NS |%'`
-  if (campaigns.length === 1) return `${prefix} ${column} = '${campaigns[0].replace(/'/g, "''")}'`
-  return `${prefix} ${column} IN (${sqlList(campaigns)})`
+// Values are segment codes (e.g. "CIO_NT_MM") → translated to LIKE 'NS | CODE%'.
+// When no segments are selected, defaults to all NS sequences.
+export function campaignSqlFilter(segments: string[], prefix = 'AND', column = 'campaign_name'): string {
+  if (segments.length === 0) return `${prefix} ${column} LIKE 'NS |%'`
+  const likes = segments.map(code => `${column} LIKE 'NS | ${code.replace(/'/g, "''")}%'`)
+  return `${prefix} (${likes.join(' OR ')})`
 }
 
 // Date interval filter.

@@ -115,29 +115,26 @@ function DateRangeFilter({ value, onChange }: { value: string; onChange: (v: str
   )
 }
 
-function CampaignMultiSelect({
-  campaigns,
+interface Segment { code: string; label: string }
+
+function SegmentMultiSelect({
+  segments,
   selected,
   onChange,
 }: {
-  campaigns: string[]
+  segments: Segment[]
   selected: string[]
   onChange: (selected: string[]) => void
 }) {
   const [open, setOpen] = useState(false)
   const [localSelected, setLocalSelected] = useState<string[]>(selected)
   const ref = useRef<HTMLDivElement>(null)
-  // Use refs so the mousedown listener doesn't go stale
   const localRef = useRef<string[]>(selected)
   const selectedRef = useRef<string[]>(selected)
   const onChangeRef = useRef(onChange)
 
   useEffect(() => { onChangeRef.current = onChange }, [onChange])
-
-  // Keep localRef in sync with state
   useEffect(() => { localRef.current = localSelected }, [localSelected])
-
-  // When URL-driven selected changes (e.g. navigating back), re-sync local state
   useEffect(() => {
     selectedRef.current = selected
     setLocalSelected(selected)
@@ -157,32 +154,29 @@ function CampaignMultiSelect({
     }
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
-  // Empty deps: refs ensure no stale closures
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  function toggle(c: string) {
-    setLocalSelected(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])
+  function toggle(code: string) {
+    setLocalSelected(prev => prev.includes(code) ? prev.filter(x => x !== code) : [...prev, code])
   }
 
   function handleToggleOpen() {
-    if (open) {
-      closeAndApply()
-    } else {
-      setOpen(true)
-    }
+    if (open) closeAndApply()
+    else setOpen(true)
   }
 
+  const labelMap = Object.fromEntries(segments.map(s => [s.code, s.label]))
   const label =
-    localSelected.length === 0 ? 'All Campaigns' :
-    localSelected.length === 1 ? (localSelected[0].length > 28 ? localSelected[0].slice(0, 26) + '…' : localSelected[0]) :
-    `${localSelected.length} campaigns`
+    localSelected.length === 0 ? 'All Segments' :
+    localSelected.length === 1 ? (labelMap[localSelected[0]] ?? localSelected[0]).slice(0, 26) + ((labelMap[localSelected[0]] ?? localSelected[0]).length > 26 ? '…' : '') :
+    `${localSelected.length} segments`
 
   return (
     <div ref={ref} className="relative">
       <button
         onClick={handleToggleOpen}
-        className="bg-graphite-800 border border-white/10 text-white/60 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-pulse-blue/40 cursor-pointer flex items-center gap-1.5 max-w-[200px]"
+        className="bg-graphite-800 border border-white/10 text-white/60 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-pulse-blue/40 cursor-pointer flex items-center gap-1.5 max-w-[220px]"
       >
         <span className="truncate">{label}</span>
         <svg className="w-3 h-3 shrink-0 opacity-50" viewBox="0 0 24 24" fill="currentColor">
@@ -191,8 +185,8 @@ function CampaignMultiSelect({
       </button>
 
       {open && (
-        <div className="absolute top-full mt-1 left-0 z-[200] bg-graphite-800 border border-white/10 rounded-lg shadow-xl min-w-[260px] max-h-64 overflow-y-auto">
-          {campaigns.length === 0 ? (
+        <div className="absolute top-full mt-1 left-0 z-[200] bg-graphite-800 border border-white/10 rounded-lg shadow-xl min-w-[300px] max-h-64 overflow-y-auto">
+          {segments.length === 0 ? (
             <p className="text-white/30 text-xs px-3 py-2">Loading…</p>
           ) : (
             <>
@@ -202,15 +196,15 @@ function CampaignMultiSelect({
               >
                 Clear all
               </button>
-              {campaigns.map(c => (
-                <label key={c} className="flex items-center gap-2 px-3 py-2 hover:bg-white/5 cursor-pointer">
+              {segments.map(s => (
+                <label key={s.code} className="flex items-center gap-2 px-3 py-2 hover:bg-white/5 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={localSelected.includes(c)}
-                    onChange={() => toggle(c)}
+                    checked={localSelected.includes(s.code)}
+                    onChange={() => toggle(s.code)}
                     className="accent-pulse-blue shrink-0"
                   />
-                  <span className="text-xs text-white/60 truncate">{c}</span>
+                  <span className="text-xs text-white/60 truncate">{s.label}</span>
                 </label>
               ))}
             </>
@@ -225,10 +219,10 @@ export default function FilterBar() {
   const pathname = usePathname()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [campaigns, setCampaigns] = useState<string[]>([])
+  const [segments, setSegments] = useState<Segment[]>([])
 
   useEffect(() => {
-    fetch('/api/campaigns').then(r => r.json()).then(setCampaigns).catch(() => {})
+    fetch('/api/campaigns').then(r => r.json()).then(setSegments).catch(() => {})
   }, [])
 
   if (EXCLUDED_PATHS.some(p => pathname?.includes(p))) return null
@@ -254,8 +248,8 @@ export default function FilterBar() {
     <div className="relative z-40 flex items-center gap-3 px-5 py-2 border-b border-white/5 bg-graphite-900/80 backdrop-blur-sm shrink-0">
       <p className="text-white/20 text-xs font-mono uppercase tracking-widest shrink-0">Filters</p>
       <DateRangeFilter value={dateRange} onChange={v => updateFilter('dateRange', v)} />
-      <CampaignMultiSelect
-        campaigns={campaigns}
+      <SegmentMultiSelect
+        segments={segments}
         selected={selectedCampaigns}
         onChange={updateCampaigns}
       />
