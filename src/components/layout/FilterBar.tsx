@@ -4,11 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 
 const EXCLUDED_PATHS = [
-  '/admin/field-discovery',
-  '/admin/field-mappings',
   '/admin/benchmarks',
   '/admin/users',
-  '/admin/integrations',
   '/ops/ai-insights',
 ]
 

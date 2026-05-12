@@ -7,21 +7,10 @@ import {
   campaignSqlFilter, dateIntervalFilter,
 } from '@/lib/bigquery'
 import SegmentTables from '@/components/tables/SegmentTables'
+import { SEGMENT_NAME_MAP, SEGMENT_CODE_ORDER, extractSegmentCode } from '@/lib/segments'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-
-const SEGMENT_CODE_ORDER = ['CIO_NT_MM', 'CIO_NT_U50', 'CEO_T_U50', 'CTO_T_U50', 'CEO_NT', 'CTO_FTS', 'PE_MP']
-
-const SEGMENT_NAME_MAP: Record<string, string> = {
-  CIO_NT_MM: 'CIOs & Tech Leaders | Non-Tech | $50–$500M',
-  CEO_NT: 'CEOs & Non-Tech Leaders | Non-Tech',
-  CEO_T_U50: 'CEOs & Non-Tech Leaders | Tech | Under $50M',
-  CTO_T_U50: 'CTOs & Tech Leaders | Tech | Under $50M',
-  CTO_FTS: 'CTOs & Tech Leaders | Funded Tech Startups',
-  PE_MP: 'Managing Partners | Private Equity',
-  CIO_NT_U50: 'CIOs & Tech Leaders | Non-Tech | Under $50M new',
-}
 
 const NEWSLETTER_NAME = 'Nurture & Future Interest'
 
@@ -34,18 +23,6 @@ type StatsRow = {
 
 function emptyRow(name: string, members: number): StatsRow {
   return { name, members, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, deliveryRate: 0, openRate: 0, clickRate: 0, ctr: 0, unsubRate: 0, mqlRate: 0, sqlRate: 0, wonRevenue: 0 }
-}
-
-function extractSegmentCode(name: string): string | null {
-  const parts = name.split(' | ')
-  if (parts.length >= 2 && parts[0].trim() === 'NS') {
-    const code = parts[1].trim()
-    if (SEGMENT_NAME_MAP[code]) return code
-  }
-  for (const code of SEGMENT_CODE_ORDER) {
-    if (name.includes(code)) return code
-  }
-  return null
 }
 
 interface MemberRow {

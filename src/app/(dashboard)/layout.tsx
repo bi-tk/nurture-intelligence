@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { Suspense } from 'react'
 import Sidebar from '@/components/layout/Sidebar'
 import FilterBar from '@/components/layout/FilterBar'
+import AutoLogout from '@/components/layout/AutoLogout'
 import type { Role } from '@prisma/client'
 
 export default async function DashboardLayout({
@@ -22,6 +23,7 @@ export default async function DashboardLayout({
         </Suspense>
         {children}
       </main>
+      <AutoLogout />
     </div>
   )
 }

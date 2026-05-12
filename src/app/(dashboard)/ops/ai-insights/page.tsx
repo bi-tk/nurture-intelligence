@@ -1,13 +1,12 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
-import { mockAiInsight } from '@/lib/mock-data'
 
 const insights = [
   {
     type: 'executive_summary',
     label: 'Executive Summary',
     audience: 'executive',
-    content: mockAiInsight,
+    content: 'Over the past 18 days, email performance has improved meaningfully — unique open rate is up 2.1pp to 24.7%, driven by strong gains in the SaaS Mid-Market and Enterprise Re-Engagement sequences. MQLs grew 11.4% to 312, and won revenue reached $540K, up 28.6% vs. last period.',
     approved: true,
   },
   {

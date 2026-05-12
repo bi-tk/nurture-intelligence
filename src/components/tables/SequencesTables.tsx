@@ -93,15 +93,6 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 const sequenceColumns: Column[] = [
-  {
-    key: 'name',
-    label: 'Sequence',
-    format: (v, row) => (
-      <p className="truncate max-w-[200px] text-white font-medium whitespace-nowrap">
-        {formatSequenceName(String(v ?? ''), String(row?.emailNumber ?? ''), String(row?.segment ?? ''))}
-      </p>
-    ),
-  },
   { key: 'segment', label: 'NS Segment', format: (v) => <span className="text-white/50 whitespace-nowrap text-xs">{v ? String(v) : '—'}</span> },
   { key: 'status', label: 'Status', format: (v) => <StatusBadge status={String(v ?? '')} /> },
   { key: 'sent', label: 'Sent', format: (v) => <span className="text-white/70 font-mono">{formatNumber(Number(v ?? 0))}</span> },
