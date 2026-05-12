@@ -563,7 +563,6 @@ export default async function ExecutivePage({
             <KpiCard label="Unsubscribed" value={kpi.unsubscribesCount.toLocaleString()} />
             <KpiCard label="Bounced" value={kpi.bouncesCount.toLocaleString()} />
             <KpiCard label="Spam Complaints" value={kpi.spamCount.toLocaleString()} />
-            <KpiCard label="Avg Sales Cycle" value="—" />
           </div>
         </div>
 
